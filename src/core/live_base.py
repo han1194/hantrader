@@ -117,7 +117,17 @@ class LiveEngineBase(ABC):
                 except KeyboardInterrupt:
                     raise
                 except Exception as e:
-                    self.log.system(f"틱 처리 오류: {e}", level="ERROR", exc_info=True)
+                    if self._is_transient_error(e):
+                        self.log.system(
+                            f"틱 처리 중 일시적 네트워크 오류, 재접속 시도: {type(e).__name__}",
+                            level="WARNING",
+                        )
+                        try:
+                            self.exchange.reconnect()
+                        except Exception as re:
+                            self.log.system(f"재접속 실패: {re}", level="WARNING")
+                    else:
+                        self.log.system(f"틱 처리 오류: {e}", level="ERROR", exc_info=True)
 
                 time.sleep(poll_interval)
         except KeyboardInterrupt:
@@ -317,29 +327,80 @@ class LiveEngineBase(ABC):
             except Exception as e:
                 self.log.signal(f"MTF 상위 TF 준비 실패: {e}", level="WARNING")
 
-        # 하위 TF: 거래소에서 직접 가져오기
+        # 하위 TF: 거래소에서 직접 가져오기 (네트워크 단절 시 재접속 재시도)
         if self.strategy.lower_tf:
-            try:
-                df_lower = self.exchange.fetch_ohlcv(
-                    self.symbol, self.strategy.lower_tf,
-                    limit=self.lookback_candles * 2,
-                )
-                if not df_lower.empty:
-                    self.log.signal(f"MTF 하위 TF({self.strategy.lower_tf}): {len(df_lower)}캔들")
-            except Exception as e:
-                self.log.signal(f"MTF 하위 TF 데이터 수신 실패: {e}", level="WARNING")
+            max_retries = 3
+            for attempt in range(1, max_retries + 1):
+                try:
+                    df_lower = self.exchange.fetch_ohlcv(
+                        self.symbol, self.strategy.lower_tf,
+                        limit=self.lookback_candles * 2,
+                    )
+                    if not df_lower.empty:
+                        self.log.signal(f"MTF 하위 TF({self.strategy.lower_tf}): {len(df_lower)}캔들")
+                    break
+                except Exception as e:
+                    if self._is_transient_error(e) and attempt < max_retries:
+                        wait = attempt * 10
+                        self.log.signal(
+                            f"MTF 하위 TF 네트워크 단절 (시도 {attempt}/{max_retries}), "
+                            f"{wait}초 후 재시도: {type(e).__name__}",
+                            level="WARNING",
+                        )
+                        time.sleep(wait)
+                        try:
+                            self.exchange.reconnect()
+                        except Exception:
+                            pass
+                    else:
+                        self.log.signal(f"MTF 하위 TF 데이터 수신 실패: {e}", level="WARNING")
+                        break
 
         self.strategy.prepare_mtf_data(df_lower=df_lower, df_upper=df_upper)
 
+    # 네트워크 일시 단절로 간주하는 에러 키워드 (절전 복귀, 타임아웃 등)
+    _TRANSIENT_ERRORS = (
+        "RequestTimeout", "ReadTimeout", "timed out",
+        "ConnectionError", "NetworkError", "ConnectionReset",
+        "BrokenPipe", "RemoteDisconnected", "Connection reset",
+        "Connection refused", "EOF occurred", "SSL", "ECONNRESET",
+    )
+
+    def _is_transient_error(self, e: Exception) -> bool:
+        """일시적 네트워크 에러인지 판단한다."""
+        err_str = str(e)
+        err_type = type(e).__name__
+        return any(k in err_str or k in err_type for k in self._TRANSIENT_ERRORS)
+
     def _fetch_candles(self) -> pd.DataFrame:
-        """거래소에서 최근 캔들 데이터를 가져온다."""
-        try:
-            return self.exchange.fetch_ohlcv(
-                self.symbol, self.timeframe, limit=self.lookback_candles,
-            )
-        except Exception as e:
-            self.log.system(f"데이터 수신 실패: {e}", level="ERROR", exc_info=True)
-            return pd.DataFrame()
+        """거래소에서 최근 캔들 데이터를 가져온다.
+
+        네트워크 단절(절전 복귀, 타임아웃 등) 시 세션 재생성 후 최대 3회 재시도한다.
+        """
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
+                return self.exchange.fetch_ohlcv(
+                    self.symbol, self.timeframe, limit=self.lookback_candles,
+                )
+            except Exception as e:
+                if self._is_transient_error(e) and attempt < max_retries:
+                    wait = attempt * 10
+                    self.log.system(
+                        f"네트워크 단절 감지 (시도 {attempt}/{max_retries}), "
+                        f"{wait}초 후 재접속 재시도: {type(e).__name__}",
+                        level="WARNING",
+                    )
+                    time.sleep(wait)
+                    try:
+                        self.exchange.reconnect()
+                        self.log.system("거래소 세션 재생성 완료", level="DEBUG")
+                    except Exception as re:
+                        self.log.system(f"세션 재생성 실패: {re}", level="WARNING")
+                else:
+                    self.log.system(f"데이터 수신 실패: {e}", level="ERROR", exc_info=True)
+                    return pd.DataFrame()
+        return pd.DataFrame()
 
     def _generate_signals_with_state(self, df: pd.DataFrame) -> list[Signal]:
         """전략의 내부 상태를 유지하면서 시그널을 생성한다."""

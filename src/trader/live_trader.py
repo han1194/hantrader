@@ -155,7 +155,55 @@ class LiveTrader(LiveEngineBase):
         self.log.system("트레이더 중지 (Ctrl+C) — 포지션 유지")
 
     def _on_initialized(self):
+        self._reconcile_strategy_state()
         self._print_status(self._get_ticker_price())
+
+    def _reconcile_strategy_state(self):
+        """워밍업 후 전략 내부 상태와 실제 거래소 포지션을 대조하여 불일치를 수정한다.
+
+        워밍업(generate_signals 재현)은 과거 캔들을 기준으로 내부 step 상태를 계산하므로
+        실제 거래소 포지션과 다를 수 있다. 여기서는 거래소 포지션을 정답으로 삼아 보정한다.
+        """
+        pos_side = self.position.side
+        long_step = self._long_step
+        short_step = self._short_step
+
+        if not pos_side and (long_step > 0 or short_step > 0):
+            self.log.trade(
+                f"[상태 보정] 워밍업 내부 상태(L{long_step}/S{short_step})와 "
+                f"실제 포지션(없음) 불일치 → 전략 상태 초기화",
+                level="WARNING",
+            )
+            self._long_step = 0
+            self._short_step = 0
+            self._entry_price = 0.0
+            self._total_weight = 0.0
+        elif pos_side == "long" and long_step == 0:
+            self.log.trade(
+                f"[상태 보정] 실제 거래소 Long 포지션이 있으나 전략 내부 상태 0 "
+                f"→ step=1 / 진입가={self.position.avg_price:,.2f} 로 복원",
+                level="WARNING",
+            )
+            self._long_step = 1
+            self._short_step = 0
+            self._entry_price = self.position.avg_price
+            self._total_weight = 1.0
+        elif pos_side == "short" and short_step == 0:
+            self.log.trade(
+                f"[상태 보정] 실제 거래소 Short 포지션이 있으나 전략 내부 상태 0 "
+                f"→ step=1 / 진입가={self.position.avg_price:,.2f} 로 복원",
+                level="WARNING",
+            )
+            self._short_step = 1
+            self._long_step = 0
+            self._entry_price = self.position.avg_price
+            self._total_weight = 1.0
+        else:
+            self.log.trade(
+                f"[상태 확인] 거래소 포지션({pos_side or '없음'})과 "
+                f"전략 상태(L{long_step}/S{short_step}) 일치",
+                level="DEBUG",
+            )
 
     def _on_tick_start(self):
         # 일일 손실 리셋
@@ -323,13 +371,22 @@ class LiveTrader(LiveEngineBase):
         self._taker_fee = fee_rates["taker"]
         self._maker_fee = fee_rates["maker"]
         exchange_max_leverage = self.exchange.get_max_leverage(self.symbol)
+        max_lev_display = (
+            f"{exchange_max_leverage}x" if exchange_max_leverage > 0
+            else "조회실패(config값 사용)"
+        )
 
         self.log.system(
             f"거래소 제약조건 | 최소수량={self._min_amount} "
             f"최소금액={self._min_cost} USDT | "
             f"수수료: taker={self._taker_fee:.4%} maker={self._maker_fee:.4%} | "
-            f"최대레버리지={exchange_max_leverage}x"
+            f"최대레버리지={max_lev_display}"
         )
+        if exchange_max_leverage == 0:
+            self.log.system(
+                "최대 레버리지 조회 실패 — config 값 그대로 사용, 클램핑 없음",
+                level="WARNING",
+            )
 
         # --- 레버리지 검증: config 값이 거래소 한도 초과 시 클램핑 ---
         if exchange_max_leverage > 0:
@@ -390,19 +447,26 @@ class LiveTrader(LiveEngineBase):
             self.log.asset(f"잔고 조회 실패: {e}", level="ERROR", exc_info=True)
 
     def _sync_position(self):
-        """거래소 포지션을 동기화한다."""
+        """거래소 포지션을 동기화한다.
+
+        거래소에 포지션이 없는데 내부 상태(self.position)에 포지션이 남아 있으면
+        emergency stop 트리거 또는 강제청산(liquidation)으로 판단하고 내부 상태를
+        초기화한다. (그렇지 않으면 다음 청산 시그널에서 -2022 reduceOnly 거절 발생)
+        """
         try:
             positions = self.exchange.fetch_positions([self.symbol])
+            pos_found = False
             if positions:
                 pos = positions[0]
                 side = pos.get("side", "")
                 contracts = float(pos.get("contracts", 0))
                 entry_price = float(pos.get("entryPrice", 0))
-                leverage = int(pos.get("leverage", 1))
+                leverage = int(pos.get("leverage") or 1)
                 margin = float(pos.get("initialMargin", 0) or pos.get("collateral", 0))
                 liq_price = float(pos.get("liquidationPrice", 0) or 0)
 
                 if contracts > 0 and side:
+                    pos_found = True
                     self.position.side = side
                     self.position.avg_price = entry_price
                     self.position.total_margin = margin
@@ -414,8 +478,24 @@ class LiveTrader(LiveEngineBase):
                         f"평단={entry_price:,.2f} 마진={margin:,.2f} 레버={leverage}x "
                         f"청산가={liq_price:,.2f}"
                     )
-            else:
-                self.log.trade("기존 포지션 없음")
+
+            if not pos_found:
+                if self.position.side:
+                    prev_side = self.position.side
+                    self.log.trade(
+                        f"[포지션 불일치] 내부={prev_side.upper()} / 거래소=없음 "
+                        f"→ 긴급손절(emergency stop) 또는 강제청산 감지. 내부 상태 초기화",
+                        level="WARNING",
+                    )
+                    self._emergency_order_id = ""
+                    self._long_step = 0
+                    self._short_step = 0
+                    self._entry_price = 0.0
+                    self._total_weight = 0.0
+                    self.position = LivePosition()
+                    self._save_state()
+                else:
+                    self.log.trade("기존 포지션 없음")
         except Exception as e:
             self.log.trade(f"포지션 조회 실패: {e}", level="WARNING", exc_info=True)
 
@@ -856,6 +936,18 @@ class LiveTrader(LiveEngineBase):
                 params={"reduceOnly": True},
             )
         except Exception as e:
+            err_str = str(e)
+            if "-2022" in err_str or "ReduceOnly Order is rejected" in err_str:
+                # 포지션이 이미 없는 경우 (emergency stop 트리거, 강제청산 등)
+                self.log.trade(
+                    "청산 주문 거절(-2022): 포지션이 이미 없을 가능성 있음. 거래소 동기화 실행",
+                    level="WARNING",
+                )
+                self._sync_position()
+                if not self.position.side:
+                    # _sync_position에서 이미 내부 상태 초기화됨 → 조용히 종료
+                    self.log.trade("포지션 없음 확인. 청산 주문 취소 (이미 청산됨)", level="WARNING")
+                    return
             self.log.trade(f"청산 주문 실패: {e}", level="ERROR", exc_info=True)
             return
 

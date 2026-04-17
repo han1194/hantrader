@@ -42,6 +42,9 @@ class ExchangeWrapper:
         if api_secret:
             config["secret"] = api_secret
 
+        self._exchange_class = exchange_class
+        self._config = config
+        self._testnet = testnet
         self.exchange: ccxt.Exchange = exchange_class(config)
         self.exchange_id = exchange_id
         self._authenticated = bool(api_key and api_secret)
@@ -51,6 +54,17 @@ class ExchangeWrapper:
             logger.info(f"거래소 초기화 (테스트넷): {exchange_id}")
         else:
             logger.info(f"거래소 초기화: {exchange_id}")
+
+    def reconnect(self):
+        """HTTP 세션을 재생성하여 절전 복귀 등 네트워크 단절 후 재접속한다."""
+        try:
+            self.exchange.session.close()
+        except Exception:
+            pass
+        self.exchange = self._exchange_class(self._config)
+        if self._testnet:
+            self.exchange.set_sandbox_mode(True)
+        logger.info(f"거래소 재접속 완료: {self.exchange_id}")
 
     @property
     def authenticated(self) -> bool:
@@ -226,23 +240,74 @@ class ExchangeWrapper:
         return self.exchange.fetch_ticker(symbol)
 
     def get_min_amount(self, symbol: str) -> float:
-        """심볼의 최소 주문 수량을 반환한다."""
+        """심볼의 최소 주문 수량을 반환한다.
+
+        Binance Futures는 market['limits']['amount']['min']이 부정확한 경우가 있어
+        market['info']['filters'] 중 LOT_SIZE.minQty를 우선 사용한다.
+        """
         self.exchange.load_markets()
         market = self.exchange.market(symbol)
-        return market.get("limits", {}).get("amount", {}).get("min", 0.001)
+
+        filters = market.get("info", {}).get("filters", [])
+        for f in filters:
+            if f.get("filterType") == "LOT_SIZE":
+                lot_min = float(f.get("minQty", 0))
+                if lot_min > 0:
+                    logger.debug(f"get_min_amount(LOT_SIZE): {symbol} min={lot_min}")
+                    return lot_min
+
+        val = market.get("limits", {}).get("amount", {}).get("min", 0.001)
+        logger.debug(f"get_min_amount(limits): {symbol} min={val}")
+        return val
 
     def get_min_cost(self, symbol: str) -> float:
-        """심볼의 최소 주문금액(notional)을 반환한다."""
+        """심볼의 최소 주문금액(notional)을 반환한다.
+
+        Binance Futures는 MIN_NOTIONAL 필터의 notional 값을 우선 사용한다.
+        """
         self.exchange.load_markets()
         market = self.exchange.market(symbol)
-        return market.get("limits", {}).get("cost", {}).get("min", 0)
+
+        filters = market.get("info", {}).get("filters", [])
+        for f in filters:
+            if f.get("filterType") in ("MIN_NOTIONAL", "NOTIONAL"):
+                notional = float(f.get("notional") or f.get("minNotional") or 0)
+                if notional > 0:
+                    logger.debug(f"get_min_cost(MIN_NOTIONAL): {symbol} min={notional}")
+                    return notional
+
+        val = market.get("limits", {}).get("cost", {}).get("min", 0)
+        logger.debug(f"get_min_cost(limits): {symbol} min={val}")
+        return val
 
     def get_max_leverage(self, symbol: str) -> int:
-        """심볼의 최대 허용 레버리지를 반환한다."""
+        """심볼의 최대 허용 레버리지를 반환한다.
+
+        1) market 정보의 limits.leverage.max 시도
+        2) 없으면 fetch_leverage_tiers로 티어별 최대값 추출 (Binance Futures 등)
+        3) 둘 다 실패하면 0 반환
+        """
         self.exchange.load_markets()
         market = self.exchange.market(symbol)
         max_lev = market.get("limits", {}).get("leverage", {}).get("max")
-        return int(max_lev) if max_lev else 0
+        if max_lev:
+            return int(max_lev)
+
+        try:
+            tiers = self.exchange.fetch_leverage_tiers([symbol])
+            symbol_tiers = tiers.get(symbol, [])
+            if symbol_tiers:
+                result = int(max(
+                    t.get("maxLeverage") or t.get("max_leverage") or 0
+                    for t in symbol_tiers
+                ))
+                logger.info(f"get_max_leverage(tiers): {symbol} max={result}x")
+                return result
+        except Exception as e:
+            logger.warning(f"fetch_leverage_tiers 실패: {e}")
+
+        logger.warning(f"get_max_leverage 조회 실패: {symbol} → 0 반환")
+        return 0
 
     def get_fee_rates(self, symbol: str) -> dict:
         """심볼의 taker/maker 수수료율을 반환한다.
