@@ -11,7 +11,6 @@
 - OHLCV 요청당 최대 200캔들 (바이낸스 1000과 다름)
 """
 
-import logging
 import time as _time
 from datetime import datetime
 
@@ -51,11 +50,11 @@ class UpbitWrapper(ExchangeWrapper):
 
     def set_leverage(self, symbol: str, leverage: int):
         """업비트는 현물 거래소로 레버리지 설정 불가. 무시."""
-        self._alog(logging.DEBUG, f"set_leverage 무시 (업비트 현물): {symbol} {leverage}x")
+        logger.debug(f"set_leverage 무시 (업비트 현물): {symbol} {leverage}x")
 
     def set_margin_mode(self, symbol: str, mode: str = "isolated"):
         """업비트는 현물 거래소로 마진 모드 설정 불가. 무시."""
-        self._alog(logging.DEBUG, f"set_margin_mode 무시 (업비트 현물): {symbol} {mode}")
+        logger.debug(f"set_margin_mode 무시 (업비트 현물): {symbol} {mode}")
 
     def get_max_leverage(self, symbol: str) -> int:
         """업비트는 현물 거래소. 항상 1 반환."""
@@ -83,7 +82,7 @@ class UpbitWrapper(ExchangeWrapper):
         params: dict | None = None,
     ) -> dict:
         """업비트는 STOP_MARKET 주문 미지원. 빈 dict 반환."""
-        self._alog(logging.WARNING,
+        logger.warning(
             f"create_stop_market_order 무시 (업비트 미지원): {symbol} stop={stop_price:,.2f}")
         return {}
 
@@ -99,15 +98,14 @@ class UpbitWrapper(ExchangeWrapper):
         호환성을 위해 'USDT' 키도 동일 값으로 채운다.
         """
         self._require_auth()
-        self._alog(logging.DEBUG, "fetch_balance 요청 (업비트)")
+        logger.debug("fetch_balance 요청 (업비트)")
         balance = self.exchange.fetch_balance()
         krw = balance.get("KRW", {})
         free = float(krw.get("free", 0) or 0)
         total = float(krw.get("total", 0) or 0)
         # 호환성: USDT 키에도 KRW 값 채움 (LiveTrader가 USDT 기준으로 읽음)
         balance["USDT"] = {"free": free, "total": total}
-        self._alog(logging.DEBUG,
-            f"fetch_balance 응답: KRW free={free:,.0f} total={total:,.0f}")
+        logger.debug(f"fetch_balance 응답: KRW free={free:,.0f} total={total:,.0f}")
         return balance
 
     def create_market_order(
@@ -129,7 +127,7 @@ class UpbitWrapper(ExchangeWrapper):
             amount: 매수 시 KRW 금액, 매도 시 코인 수량
         """
         self._require_auth()
-        self._alog(logging.INFO,
+        logger.info(
             f"create_market_order 요청: {side.upper()} {symbol} amount={amount:.2f}")
 
         extra_params = params or {}
@@ -145,7 +143,7 @@ class UpbitWrapper(ExchangeWrapper):
 
         avg_price = float(order.get("average") or order.get("price") or 0)
         filled = float(order.get("filled") or amount)
-        self._alog(logging.INFO,
+        logger.info(
             f"create_market_order 체결: {side.upper()} {symbol} "
             f"체결가={avg_price:,.2f} 수량={filled:.8f} 주문ID={order.get('id', '')}")
         return order
@@ -155,11 +153,11 @@ class UpbitWrapper(ExchangeWrapper):
 
         업비트는 Binance 필터가 없으므로 ccxt limits를 직접 사용한다.
         """
-        self._alog(logging.DEBUG, f"get_min_amount: {symbol}")
+        logger.debug(f"get_min_amount: {symbol}")
         self.exchange.load_markets()
         market = self.exchange.market(symbol)
         val = market.get("limits", {}).get("amount", {}).get("min") or 0.0001
-        self._alog(logging.DEBUG, f"get_min_amount 응답: {symbol} min_amount={val}")
+        logger.debug(f"get_min_amount 응답: {symbol} min_amount={val}")
         return float(val)
 
     def get_min_cost(self, symbol: str) -> float:
@@ -168,11 +166,11 @@ class UpbitWrapper(ExchangeWrapper):
         업비트 최소 주문금액은 5,000 KRW.
         ccxt limits.cost.min 이 없는 경우 기본값 5000을 반환한다.
         """
-        self._alog(logging.DEBUG, f"get_min_cost: {symbol}")
+        logger.debug(f"get_min_cost: {symbol}")
         self.exchange.load_markets()
         market = self.exchange.market(symbol)
         val = market.get("limits", {}).get("cost", {}).get("min") or 5000.0
-        self._alog(logging.DEBUG, f"get_min_cost 응답: {symbol} min_cost={val:,.0f} KRW")
+        logger.debug(f"get_min_cost 응답: {symbol} min_cost={val:,.0f} KRW")
         return float(val)
 
     def get_fee_rates(self, symbol: str) -> dict:
@@ -180,14 +178,13 @@ class UpbitWrapper(ExchangeWrapper):
 
         업비트 기본 수수료: taker/maker 모두 0.05% (0.0005).
         """
-        self._alog(logging.DEBUG, f"get_fee_rates: {symbol}")
+        logger.debug(f"get_fee_rates: {symbol}")
         self.exchange.load_markets()
         market = self.exchange.market(symbol)
         taker = float(market.get("taker") or 0.0005)
         maker = float(market.get("maker") or 0.0005)
         result = {"taker": taker, "maker": maker}
-        self._alog(logging.DEBUG,
-            f"get_fee_rates 응답: {symbol} taker={taker:.4%} maker={maker:.4%}")
+        logger.debug(f"get_fee_rates 응답: {symbol} taker={taker:.4%} maker={maker:.4%}")
         return result
 
     # ------------------------------------------------------------------

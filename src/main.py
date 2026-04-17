@@ -35,17 +35,24 @@ def _load_env(env_path: str = ".env"):
                 os.environ.setdefault(key, value)
 
 
-def _normalize_symbol(raw: str) -> str:
-    """심볼 입력을 정규화한다. btc, BTC, btc/usdt, BTC/USDT → BTC/USDT"""
+def _normalize_symbol(raw: str, exchange: str = "") -> str:
+    """심볼 입력을 정규화한다.
+
+    바이낸스: btc, BTC, btc/usdt → BTC/USDT
+    업비트:   btc, BTC, btc/krw  → BTC/KRW
+    """
     s = raw.strip().upper().replace("_", "/")
     if "/" not in s:
-        s = s + "/USDT"
+        if exchange == "upbit":
+            s = s + "/KRW"
+        else:
+            s = s + "/USDT"
     return s
 
 
-def _normalize_symbols(raw: str) -> list[str]:
+def _normalize_symbols(raw: str, exchange: str = "") -> list[str]:
     """쉼표 구분 심볼 문자열을 정규화된 리스트로 반환한다."""
-    return [_normalize_symbol(s) for s in raw.split(",")]
+    return [_normalize_symbol(s, exchange) for s in raw.split(",")]
 
 
 def _create_strategy(cfg: AppConfig, strategy_kwargs: dict):
@@ -101,7 +108,7 @@ def cmd_collect(args, cfg: AppConfig):
 
     symbols = None
     if args.symbols:
-        symbols = _normalize_symbols(args.symbols)
+        symbols = _normalize_symbols(args.symbols, args.exchange)
 
     collector.collect(
         exchange_name=args.exchange,
@@ -129,7 +136,7 @@ def cmd_strategy(args, cfg: AppConfig):
     strategy = _create_strategy(cfg, strategy_kwargs)
 
     exchange = args.exchange
-    symbol = _normalize_symbol(args.symbol)
+    symbol = _normalize_symbol(args.symbol, exchange)
 
     log = LogManager.instance().bind()
     log.info(f"전략 실행: {exchange}/{symbol} ({strategy.timeframe})")
@@ -169,7 +176,7 @@ def cmd_backtest(args, cfg: AppConfig):
     db = DatabaseStorage(cfg.storage.db_path)
 
     exchange = args.exchange
-    symbols = _normalize_symbols(args.symbol)
+    symbols = _normalize_symbols(args.symbol, exchange)
     timeframe = args.timeframe or bt.timeframe
     initial_capital = args.capital or bt.initial_capital
     min_investment = args.min_investment or bt.min_investment
@@ -304,7 +311,7 @@ def cmd_simulate(args, cfg: AppConfig):
     simulator = LiveSimulator(
         exchange=exchange,
         exchange_name=exc_name,
-        symbol=_normalize_symbol(args.symbol),
+        symbol=_normalize_symbol(args.symbol, exc_name),
         timeframe=timeframe,
         initial_capital=initial_capital,
         min_investment=resolved["min_investment"],
@@ -348,7 +355,7 @@ def cmd_trade(args, cfg: AppConfig):
     )
 
     # 설정 해석 (코인별 오버라이드 적용)
-    symbol = _normalize_symbol(args.symbol)
+    symbol = _normalize_symbol(args.symbol, exc_name)
     resolved = cfg.trader.resolve_for_symbol(cfg.backtest, symbol)
 
     timeframe = args.timeframe or resolved["timeframe"]
@@ -435,7 +442,7 @@ def cmd_export(args, cfg: AppConfig):
     db = DatabaseStorage(cfg.storage.db_path)
 
     exchange = args.exchange
-    symbol = _normalize_symbol(args.symbol)
+    symbol = _normalize_symbol(args.symbol, exchange)
     timeframe = args.timeframe or "1h"
     output_dir = args.output or cfg.storage.csv_output_dir
 

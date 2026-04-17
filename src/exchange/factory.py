@@ -3,6 +3,7 @@ import os
 from src.config import ExchangeConfig
 from src.utils.logger import setup_logger
 from .base import ExchangeWrapper
+from .upbit import UpbitWrapper
 
 logger = setup_logger("hantrader.exchange")
 
@@ -14,7 +15,15 @@ def create_exchange(
     api_secret: str | None = None,
     testnet: bool = False,
 ) -> ExchangeWrapper:
-    """거래소 래퍼 인스턴스를 생성한다."""
+    """거래소 래퍼 인스턴스를 생성한다.
+
+    exchange_id에 따라 전용 래퍼 클래스를 반환한다:
+    - "upbit": UpbitWrapper (현물 KRW, 레버리지/포지션 없음, testnet 미지원)
+    - 그 외:   ExchangeWrapper (기본, 바이낸스 선물 등)
+    """
+    if exchange_id == "upbit":
+        return UpbitWrapper(options=options, api_key=api_key, api_secret=api_secret)
+
     return ExchangeWrapper(
         exchange_id,
         options=options,
@@ -58,7 +67,7 @@ def create_authenticated_exchange(exc_config: ExchangeConfig) -> ExchangeWrapper
 
     logger.info(f"인증 거래소 생성: {exc_config.type} (testnet={testnet})")
 
-    return ExchangeWrapper(
+    return create_exchange(
         exc_config.type,
         options=exc_config.options or None,
         api_key=api_key,
