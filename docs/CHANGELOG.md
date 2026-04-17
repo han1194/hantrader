@@ -1,5 +1,14 @@
 # HanTrader 변경 이력
 
+## 2026-04-17 Git 저장소 초기화 및 원격 저장소 연결
+
+- Git 초기화, 첫 커밋 생성
+- `.gitignore`에 `data/trader/`, `data/logs/` 경로 추가
+- GitHub Private repo 연결 (`github` remote): https://github.com/han1194/hantrader.git
+- USB bare repo 연결 (`usb` remote): E:/hantrader.git
+- 회사/집 PC 간 코드 동기화 환경 구축
+- Git 사용 가이드 작성: `docs/git_guide.md`
+
 ## 2026-04-15 실거래 트레이더 가상자본(virtual capital) 모드 추가
 
 ### 자본 모드 (capital_mode)
