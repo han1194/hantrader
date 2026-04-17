@@ -1,0 +1,213 @@
+# HanTrader Configuration
+
+# 거래소 설정
+exchanges:
+  binance_futures:
+    enabled: true
+    type: "binance"
+    options:
+      defaultType: "future"
+    auth:
+      api_key_env: "BINANCE_API_KEY"
+      api_secret_env: "BINANCE_API_SECRET"
+      testnet_env: "BINANCE_TESTNET"
+  # bybit_futures:
+  #   enabled: true
+  #   type: "bybit"
+  #   options:
+  #     defaultType: "future"
+  #   auth:
+  #     api_key_env: "BYBIT_API_KEY"
+  #     api_secret_env: "BYBIT_API_SECRET"
+  #     testnet_env: "BYBIT_TESTNET"
+  # upbit:
+  #   enabled: true
+  #   type: "upbit"
+  #   options: {}
+  #   auth:
+  #     api_key_env: "UPBIT_API_KEY"
+  #     api_secret_env: "UPBIT_API_SECRET"
+
+# 수집 대상 심볼
+symbols:
+  binance_futures:
+    - "BTC/USDT"
+    - "ETH/USDT"
+    - "XRP/USDT"
+    - "SOL/USDT"
+    - "DOGE/USDT"
+  bybit_futures:
+    - "BTC/USDT"
+    - "ETH/USDT"
+  upbit:
+    - "BTC/KRW"
+    - "ETH/KRW"
+
+# 데이터 수집 설정
+collector:
+  base_timeframe: "5m"
+  # 5m에서 파생할 타임프레임
+  derived_timeframes:
+    - "15m"
+    - "30m"
+    - "1h"
+    - "2h"
+    - "4h"
+    - "1d"
+    - "1w"
+    - "1M"
+  # 수집 기간 (None이면 거래소 최대치)
+  start_date: null
+  end_date: null
+  # 한 번에 가져올 캔들 수
+  batch_size: 1000
+  # API 요청 간 대기 (ms)
+  rate_limit_ms: 100
+
+# 저장 설정
+storage:
+  database:
+    type: "sqlite"
+    path: "data/db/hantrader.db"
+  csv:
+    enabled: true
+    output_dir: "data/csv"
+
+# ─── BB 전략 설정 ───
+# name: "bb", "bb_mtf", "bb_v2", "bb_v2_mtf"
+# bb_v2/bb_v2_mtf: BBW 최소 기준 + 물타기 간격 제한 추가
+strategy:
+  name: "bb_v2_mtf"                      # "bb" / "bb_mtf" / "bb_v2" / "bb_v2_mtf"
+  # Bollinger Bands 기본
+  bb_period: 20
+  bb_std: 2.0
+  # 국면 판단 (BB width 이동 윈도우 / 확대 판단 임계값)
+  regime_window: 20
+  regime_threshold: 0.15
+  # 추세장 손절/익절 기준 (레버리지 적용 전)
+  stoploss_pct: 0.02
+  takeprofit_pct: 0.03
+  # 추세장 트레일링 스톱 (변경: 더 빨리 활성화, 더 타이트하게 보호)
+  trailing_start_pct: 0.01      # PnL이 이 값 이상이면 트레일링 활성화 (기존 0.02)
+  trailing_stop_pct: 0.005      # 고점/저점 대비 이 값만큼 되돌리면 익절 (기존 0.01)
+  # 횡보장 ADX 기반 진입/물타기 억제
+  adx_entry_block: 25.0         # ADX가 이 값 이상이고 상승 중이면 신규진입 차단
+  adx_rise_lookback: 3          # ADX 상승 판단 캔들 수
+  # ─── 횡보 반전매매 BB% 진입 레벨 오버라이드 ───
+  # Short: BB% 115%+ 에서만 진입 (기존 ~90%에서 진입하던 것을 상향)
+  short_entry_levels:
+    - { bbp: 1.15, ratio: 0.30, step: 1 }
+    - { bbp: 1.25, ratio: 0.30, step: 2 }
+    - { bbp: 1.35, ratio: 0.30, step: 3 }
+  # ─── MTF (name: "bb_mtf" 또는 "bb_v2_mtf" 일 때 사용) ───
+  # 인접 TF 국면 가중치 (1h 기준: 30m/2h 참고)
+  mtf_weight_upper: 1.0       # 상위 TF 가중치
+  mtf_weight_lower: 0.5       # 하위 TF 가중치
+  mtf_trend_threshold: 2.5    # 추세 판정 임계값 (기준TF=2 + 상위=1 + 하위=0.5, 최대 3.5)
+  # ─── bb_v2 전용 파라미터 ───
+  min_bbw_for_sideways: 1.0     # 횡보 반전매매 최소 BBW (밴드가 이보다 좁으면 진입 차단)
+  min_entry_interval: 3         # 추세 물타기 최소 간격 (캔들 수, 기존: 1)
+
+# ─── 백테스트 설정 ───
+backtest:
+  # 기본 백테스트 기간 (2년)
+  default_period_years: 2
+  # 기본 타임프레임
+  timeframe: "1h"
+  # 초기 자본금 (USDT)
+  initial_capital: 100
+  # 최소 투자 수량 (코인 단위, 예: BTC 0.002개)
+  min_investment: 0.002
+  # 1회 진입 마진: margin_pct > 0이면 자본 대비 %(동적), 아니면 max_margin_per_entry 고정 USDT
+  margin_pct: 0.05              # 자본의 5% (0이면 고정 마진 사용)
+  max_margin_per_entry: 50      # margin_pct=0일 때 고정 마진 상한 (USDT)
+  # 레버리지 범위 (BB width에 따라 동적 조정)
+  leverage_max: 50
+  leverage_min: 20
+  # 횡보장 레버리지 상한 (반전매매 시 강제청산 방지)
+  sideways_leverage_max: 15
+  # 지표 워밍업 캔들 수
+  warmup_candles: 100
+  # 리포트 출력 경로
+  output_dir: "data/backtest"
+
+# ─── 시뮬레이터 설정 ───
+simulator:
+  # 타임프레임 (기본: backtest 설정 따름)
+  timeframe: "1h"
+  # 초기 데이터 로드 캔들 수 (전략 워밍업용)
+  lookback_candles: 100
+  # 로그/거래내역 출력 경로
+  log_dir: "data/simulator"
+
+# ─── 실거래 트레이더 설정 ───
+trader:
+  # 타임프레임
+  timeframe: "1h"
+  # 초기 자본금 (USDT)
+  initial_capital: 100
+  # 1회 진입 마진: margin_pct > 0이면 자본 대비 %(동적), 아니면 max_margin_per_entry 고정 USDT
+  margin_pct: 0.05              # 자본의 5% (0이면 고정 마진 사용)
+  max_margin_per_entry: 5       # margin_pct=0일 때 고정 마진 상한 (USDT)
+  # 레버리지 범위 (BB width에 따라 동적 조정)
+  leverage_max: 50
+  leverage_min: 50
+  # 횡보장 레버리지 상한 (반전매매 시 강제청산 방지)
+  sideways_leverage_max: 15
+  # 마진 모드 (isolated: 격리, cross: 교차)
+  margin_mode: "cross"
+  # 자본 모드:
+  #   total   — 실잔고 기준 (거래소 가용잔고를 capital로 사용)
+  #   virtual — 가상자본 기준 (initial_capital에서 시작, PnL만 반영, 실잔고 무시)
+  capital_mode: "total"
+  # 일일 최대 손실 제한 (USDT, 0이면 제한 없음)
+  daily_loss_limit: 100
+  # 중간 동기화 타임프레임 (메인 TF 사이에 거래소 포지션 변화 감지)
+  # 예: 메인 1h일 때 15m마다 동기화 → 청산/liquidation 감지
+  # null이면 중간 동기화 비활성화 (기존 방식: 10틱마다만 동기화)
+  sync_timeframe: "15m"
+  # 초기 데이터 로드 캔들 수 (전략 워밍업용)
+  lookback_candles: 100
+  # 로그/거래내역 출력 경로
+  log_dir: "data/trader"
+
+  # ─── 코인별 개별 설정 (미지정 항목은 위 기본값 적용) ───
+  symbol_overrides:
+    BTC/USDT:
+      timeframe: "1h"
+      leverage_max: 50
+      leverage_min: 50
+      sideways_leverage_max: 15
+      trade_quantity: 0.002       # 1회 진입 수량 (코인 단위)
+    ETH/USDT:
+      timeframe: "1h"
+      leverage_max: 30
+      leverage_min: 30
+      sideways_leverage_max: 10
+      trade_quantity: 0.01
+    XRP/USDT:
+      timeframe: "15m"
+      leverage_max: 20
+      leverage_min: 20
+      sideways_leverage_max: 10
+      trade_quantity: 10.0
+    SOL/USDT:
+      timeframe: "15m"
+      leverage_max: 20
+      leverage_min: 20
+      sideways_leverage_max: 10
+      trade_quantity: 0.1
+
+# ─── 로깅 설정 ───
+# 거래소/코인/날짜/카테고리별 로그 파일 자동 생성
+# 디렉토리 구조:
+#   data/logs/system/2026-04-09.log              (시스템 로그)
+#   data/logs/binance_futures/BTC_USDT/2026-04-09/
+#     trade.log   매매 (주문, 체결, 청산)
+#     asset.log   자산 (잔고, 수수료, 펀딩)
+#     signal.log  시그널 (전략, 국면 판단)
+#     market.log  시장 (캔들, 가격)
+#     all.log     전체 (DEBUG 이상)
+logging:
+  level: "DEBUG"
+  base_dir: "data/logs"

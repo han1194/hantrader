@@ -1,0 +1,397 @@
+# AI Trading System Prompt History
+
+이 문서는 AI에게 요청한 시스템 요구사항과 프롬프트 이력을 기록하기 위한 문서입니다.
+
+목적
+
+- AI가 어떤 요구사항으로 코드를 생성했는지 기록
+- 시스템 설계 의도 보존
+- 재현 가능한 개발 환경 유지
+- 연구 기록 관리
+
+---
+
+# 1. 프로젝트 개요
+
+프로젝트명  
+자동매매 봇 시스템
+
+목표
+
+- 데이터 수집
+- 트레이딩 전략 생성, 추가
+- 전략 백테스트
+- 포트폴리오 최적화
+- 자동매매 실행
+
+전체 프로세스
+
+Market Data
+↓
+Strategy Generator
+↓
+Backtest Engine
+↓
+Strategy Evaluator
+↓
+Portfolio Optimization
+↓
+Auto Trading
+
+---
+
+# 2. AI 시스템 요구 프롬프트
+
+다음 프롬프트를 사용하여 AI에게 프로그램 생성을 요청하였다.
+
+## Prompt v1.0
+
+목표  
+여러 트레이딩 전략을 생성하고 포트폴리오를 자동 최적화하는 트레이딩 시스템 구축
+
+요구사항
+
+### 시스템 기능
+
+1. 시장 데이터 수집
+2. 전략 생성
+3. 전략 백테스트
+4. 전략 평가
+5. 포트폴리오 최적화
+6. 자동매매
+7. 리스크 관리
+8. 성과 모니터링
+
+### 사용 언어
+
+Python
+
+### 라이브러리
+
+- pandas
+- numpy
+- ccxt
+- ta
+- vectorbt
+- scikit-learn
+- optuna
+- PyPortfolioOpt
+
+### 거래소
+
+- Binance 선물
+- ByBit 선물
+- Upbit
+
+### 데이터
+
+- OHLCV
+- Volume
+
+### 데이터 주기
+
+- 5m: 직접 수집
+- 15m: 5m에서 생성
+- 1h: 5m에서 생성
+- 1d: 5m에서 생성
+- 1w: 5m에서 생성
+- 1M(Month): 5m에서 생성
+
+### 래퍼 활용
+
+- ccxt, ta 등 래퍼 활용
+- ccxt exchange wrapper class 생성
+- ta wrapper class 생성
+
+### 수집 상세
+
+- 별도 수집 가능(api키 없이)
+- db 저장, csv 출력(내가 확인 쉽게)
+- 5m만 수집, 다른 timeframe은 5m에서 생성
+- 옵션으로 기간(start, end 등), 코인 지정(config 파일, 또는 실행시) 등 다양한 옵션 제공
+
+---
+
+# 3. 전략 생성 규칙
+
+지표는 ta의 지표 활용
+
+- 전략은 커스텀으로 직접 구현
+- AI가 자동생성 가능(추후 구현)
+
+첫번째 커스텀 전략 - BB 활용
+
+사용 지표
+
+- Bollinger Bands: BB, BB%, BB width
+- Volume
+- SMA
+- EMA
+- MACD
+- RSI
+
+상세 전략
+
+- 횡보장 반전매매
+- 추세장 추세추종
+
+반전매매
+
+- 횡보장: BB width가 대체로 일정하게 유지
+- 추세장: BB width가 지속적으로/급격하게 작아지거나 커짐
+
+RSI < 30 AND price < Bollinger lower → BUY
+MA20 > MA60 → BUY
+MACD crossover → BUY
+
+---
+
+# 4. 백테스트 규칙
+
+백테스트 기간
+
+- 기본 2년
+- 지정 가능
+
+백테스트 실행
+
+- 독립적으로 실행 가능
+- 옵션 실행 가능: 기간 지정, 코인 지정, 최소
+
+평가 지표
+
+- Total Return
+- Sharpe Ratio
+- Max Drawdown
+- Win Rate
+- Profit Factor
+
+전략 필터 조건
+Sharpe Ratio > 1.5
+Max Drawdown < 20%
+Win Rate > 50%
+Profit Factor > 1.3
+
+---
+
+# 5. 포트폴리오 최적화
+
+사용 방법
+
+- Mean Variance Optimization
+- Risk Parity
+- Maximum Sharpe Ratio
+- Minimum Volatility
+
+전략 가중치 예
+Strategy_A 30%
+Strategy_B 25%
+Strategy_C 20%
+Strategy_D 15%
+Strategy_E 10%
+
+---
+
+# 6. 리스크 관리
+
+기본 규칙
+포지션당 자산 2~5%
+최대 포트폴리오 리스크 20%
+손절 -5%
+익절 +10%
+
+---
+
+# 7. 자동매매 규칙
+
+기능
+
+- 실시간 데이터 수신
+- 자동 주문 실행
+- 포지션 관리
+- 주문 오류 처리
+- 거래 로그 기록
+
+---
+
+# 8. 향후 개선 계획
+
+추가 예정 기능
+
+- AI 전략 생성 (Genetic Algorithm)
+- 뉴스 기반 트레이딩
+- 강화학습 트레이딩
+- 멀티 거래소 차익거래
+- 포트폴리오 자동 리밸런싱
+
+---
+
+# 9. Prompt Version History
+
+v1.0  
+기본 포트폴리오 자동 최적화 시스템 설계
+
+v1.1 (예정)
+
+- 전략 자동 생성 AI
+- 전략 1000개 테스트 시스템
+
+
+# 3. 전략 생성 규칙
+
+지표는 ta의 지표 활용
+
+- 전략은 커스텀으로 직접 구현
+- AI가 자동생성 가능(추후 구현)
+
+첫번째 커스텀 전략 - BB 활용
+
+사용 지표
+
+- Bollinger Bands: BB, BB%, BB width
+- Volume
+- SMA
+- EMA
+- MACD
+- RSI
+
+상세 전략
+
+- 횡보장 반전매매
+- 추세장 추세추종
+
+반전매매
+
+- 횡보장: BB width가 대체로 일정하게 유지
+- 추세장: BB width가 지속적으로/급격하게 작아지거나 커짐
+
+횡보장
+
+- 
+RSI < 30 AND price < Bollinger lower → BUY
+MA20 > MA60 → BUY
+MACD crossover → BUY
+
+---
+
+# 4. 백테스트 규칙
+
+백테스트 기간
+
+- 기본 2년
+- 지정 가능
+
+백테스트 옵션
+
+- 코인 지정 가능: 기본 - config 설정
+
+매매 설정
+
+- Binance, ByBit 선물 거래 / Upbit 현물 거래
+- 최저 거래: 거래소 최저 거래로(예시 BTC - 0.002BTC)
+- 레버리지: 코인별 차등(예시 BTC - 50배, ETH - 35배) - 상황에 따라 변경
+- 거래모드 cross
+- 기본 거래 옵션: 물타기 5회까지 가능, 청산: 2~3회 분할 익절, 손절
+- stoploss: 레버러지 적용 후 cross모드(전체 마진에서 20%손실시)
+- takeprofit: 레버리지 적용 후 개별 포지션 수익 목표 달성 시 50%익절, 나머지 50%는 익절 후 최고가 대비 레버리지 적용 후 20% 하락 시 전부 청산/50% 익절가 이하로 떨어질 경우 전부 청산
+
+전략 필터 조건
+Sharpe Ratio > 1.5
+Max Drawdown < 20%
+Win Rate > 50%
+Profit Factor > 1.3
+
+---
+
+# 5. 포트폴리오 최적화
+
+사용 방법
+
+- Mean Variance Optimization
+- Risk Parity
+- Maximum Sharpe Ratio
+- Minimum Volatility
+
+전략 가중치 예
+Strategy_A 30%
+Strategy_B 25%
+Strategy_C 20%
+Strategy_D 15%
+Strategy_E 10%
+
+---
+
+# 6. 리스크 관리
+
+기본 규칙
+포지션당 자산 2~5%
+최대 포트폴리오 리스크 20%
+손절 -5%
+익절 +10%
+
+---
+
+# 7. 자동매매 규칙
+
+기능
+
+- 실시간 데이터 수신
+- 자동 주문 실행
+- 포지션 관리
+- 주문 오류 처리
+- 거래 로그 기록
+
+---
+
+# 8. 향후 개선 계획
+
+추가 예정 기능
+
+- AI 전략 생성 (Genetic Algorithm)
+- 뉴스 기반 트레이딩
+- 강화학습 트레이딩
+- 멀티 거래소 차익거래
+- 포트폴리오 자동 리밸런싱
+
+---
+
+# 9. Prompt Version History
+
+v1.0  
+기본 포트폴리오 자동 최적화 시스템 설계
+
+v1.1 (예정)
+
+- 전략 자동 생성 AI
+- 전략 1000개 테스트 시스템
+
+
+요약
+
+=============== 2026-03-25 ========================
+
+1. 백테스트 리포트 이력 보존
+ - 파일명에 타임스탬프(YYYYMMDD_HHMMSS) 추가로 매 실행마다 별도 파일 생성
+ - 예: report_binance_futures_BTC_USDT_1h_20260325_143022.txt
+ - txt, html, csv 세트가 동일 타임스탬프로 매칭됨
+
+2. 라이브 시뮬레이터 로그 시스템
+ - data/simulator/ 디렉토리에 상세 로그 파일 자동 생성
+ - 기록 항목:
+    - 시작/종료 (설정값, 실행 시간)
+    - 새 캔들 (OHLCV 값)
+    - 시그널 실행 (방향, 가격, 레버리지, 사유)
+    - 상태 (자본, PnL, 포지션)
+    - 에러 (스택 트레이스 포함)
+    - 종료 시 거래 내역 CSV 자동 저장
+
+3. export CLI 커맨드 추가 (main.py:188-224)
+
+ - DB에서 원하는 타임프레임으로 CSV 내보내기
+ - DB에 해당 타임프레임이 없으면 5m 데이터에서 자동 리샘플링
+ - --start, --end 기간 지정, --output 출력 디렉토리 지정 가능
+
+4. docs/howtorun.md 신규 작성
+
+ - 전체 CLI 명령어 사용법 (collect, export, strategy, backtest, simulate, list-exchanges)
+ - 옵션 설명, 설정 항목 정리
