@@ -111,6 +111,47 @@ HTML 대시보드에 국면별/방향별 분석 테이블 추가.
 - `src/backtest/report.py`: `generate_text()`, `generate_dashboard()`에 `strategy_config`, `backtest_config` 파라미터 추가, HTML 전략 설정 카드 생성 메서드 추가
 - `src/main.py`: 리포트 생성 시 `cfg.strategy`, `cfg.backtest` 전달
 
+## 2026-04-12 업비트 거래소 래퍼 추가
+
+### 개요
+
+업비트(현물 KRW 거래소) 지원을 위한 `UpbitWrapper` 추가.
+바이낸스 선물과의 주요 차이를 서브클래스로 처리하여 동일한 파이프라인에서 사용 가능.
+
+### 업비트 vs 바이낸스 선물 차이
+
+| 항목 | 바이낸스 선물 | 업비트 |
+|------|------------|--------|
+| 레버리지 | 가변 (최대 125x) | 없음 (1x 고정) |
+| 마진 모드 | isolated/cross | 없음 |
+| 포지션 | 있음 | 없음 (현물 잔고) |
+| 펀딩 수수료 | 있음 | 없음 |
+| STOP_MARKET | 있음 | 없음 |
+| 시장가 매수 단위 | 코인 수량 | KRW 금액 |
+| 잔고 기준 | USDT | KRW |
+| 최소 주문금액 | MIN_NOTIONAL 필터 | 5,000 KRW |
+
+### 신규 파일
+
+- `src/exchange/upbit.py`: `UpbitWrapper(ExchangeWrapper)` 클래스
+  - 선물 전용 메서드 무시/무동작 처리: `set_leverage`, `set_margin_mode`,
+    `fetch_positions`, `fetch_funding_history`, `create_stop_market_order`
+  - `get_max_leverage()` → 항상 1 반환
+  - `fetch_balance()` → KRW 잔고 반환 (USDT 키에도 복사하여 호환성 유지)
+  - `create_market_order()` → 매수는 `create_market_buy_order(KRW금액)`,
+    매도는 `create_market_sell_order(수량)` 분기
+  - `get_min_cost()` → 기본 5,000 KRW
+
+### 수정 파일
+
+- `src/exchange/factory.py`: `exchange_id == "upbit"`이면 `UpbitWrapper` 반환
+- `src/exchange/__init__.py`: `UpbitWrapper` export 추가
+- `src/main.py` `cmd_trade`: 거래소 타입별 API 키 분기
+  - `upbit` → `UPBIT_ACCESS_KEY` / `UPBIT_SECRET_KEY`
+  - 그 외 → `BINANCE_API_KEY` / `BINANCE_API_SECRET`
+
+> ⚠️ 이 기능은 2026-04-17 코드 병합 시점에 main 브랜치로 포팅되었다. 세부 코드 통합은 후속 작업 필요 (인증 리팩토링과 충돌 지점 있음).
+
 ## 2026-04-10 로그 체계 전면 리팩토링 + 모드별 분리
 
 기존 `setup_logger` + `self._file_logger` 이중 로깅 구조를 `LogManager` 싱글톤 기반
@@ -177,6 +218,32 @@ data/logs/
   - `cmd_trade`에서 `BINANCE_` 하드코딩 제거, `create_authenticated_exchange()` 사용
 - `config/config.yaml`: `exchanges.*.auth` 섹션 추가 (거래소별 환경변수 이름 설정)
 
+## 2026-04-07 절전 복귀 / 네트워크 단절 후 거래소 자동 재접속
+
+### 문제
+
+PC 절전 모드 진입 후 복귀 시 기존 HTTP 세션(소켓)이 죽어 있어 ccxt API 호출이 빈 에러 또는
+`ConnectionReset`, `BrokenPipe`, `EOF` 등 다양한 예외로 실패. 재시도 로직이 없어 해당 틱 전체를
+건너뜀.
+
+### 수정
+
+- `src/exchange/base.py`:
+  - `__init__`에서 `_exchange_class`, `_config`, `_testnet` 저장 (재생성용)
+  - `reconnect()` 메서드 추가: 기존 세션 닫고 ccxt 인스턴스 재생성 (sandbox 모드 유지)
+
+- `src/core/live_base.py`:
+  - `_TRANSIENT_ERRORS` 클래스 상수: 일시적 네트워크 에러 키워드 목록
+    (`RequestTimeout`, `ReadTimeout`, `ConnectionReset`, `BrokenPipe`, `RemoteDisconnected`,
+    `SSL`, `ECONNRESET` 등)
+  - `_is_transient_error(e)`: 위 키워드로 일시적 에러 판별
+  - `_fetch_candles()`: 재시도 대기를 5초→10초로 늘리고, 재시도마다 `exchange.reconnect()` 호출
+  - `_prepare_mtf_if_needed()` MTF 하위 TF 수신: 동일하게 재연결 적용
+  - `_check_sync_tick()`: 일시적 에러는 DEBUG로 조용히 처리
+  - 메인 폴링 루프 `except`: 일시적 에러 감지 시 `exchange.reconnect()` 호출 후 다음 틱 진행
+
+> ⚠️ 이 기능은 2026-04-17 병합 시점에 main 코드로 포팅되지 않았다. home-pre-sync 브랜치 참조.
+
 ## 2026-04-06 중간 동기화 + 코인별 개별 설정 + 클라우드 운영 가이드
 
 ### 중간 동기화 (sync_timeframe)
@@ -215,6 +282,147 @@ data/logs/
   - 클라우드 업체 비교 (Oracle Free Tier, AWS Lightsail, Vultr/DigitalOcean)
   - 권장 스펙, systemd 서비스 등록, 보안 설정
   - Git 기반 배포 워크플로우, 모니터링, 백업 방법
+
+## 2026-04-05 캔들 데이터 수신 타임아웃 재시도
+
+### 문제
+
+네트워크 일시 불안정(ReadTimeout) 시 `_fetch_candles()` / MTF 하위 TF 수신이 즉시 실패하고
+빈 DataFrame을 반환 → 해당 틱 전략 판단 건너뜀.
+
+### 수정
+
+- `src/core/live_base.py`:
+  - `_fetch_candles()`: 타임아웃/네트워크 에러(`RequestTimeout`, `ReadTimeout`, `timed out`,
+    `ConnectionError`, `NetworkError`) 감지 시 최대 3회 재시도 (5초, 10초 간격)
+  - `_prepare_mtf_if_needed()` 하위 TF 수신 동일하게 3회 재시도 처리
+
+> ⚠️ 2026-04-17 병합 시점에 main 코드로 포팅되지 않았다. home-pre-sync 브랜치 참조.
+
+## 2026-04-05 Emergency stop 트리거 / 강제청산 후 내부 상태 불일치 수정
+
+### 문제
+
+Emergency stop(서버사이드 STOP_MARKET) 또는 강제청산(liquidation)으로 거래소 포지션이 사라진 후,
+내부 `self.position` 상태가 갱신되지 않아 다음 청산 신호 발생 시 `reduceOnly` 주문이
+`-2022 ReduceOnly Order is rejected` 에러로 거절됨.
+
+### 원인
+
+`_sync_position()`이 거래소에서 포지션을 조회할 때 `contracts=0`이면 내부 `self.position`을
+초기화하지 않고 그냥 통과함 → 10틱 주기 동기화 사이에 emergency stop 트리거되어도 내부 상태가
+포지션 있음으로 유지되어 reduceOnly 청산 주문 시도 → 거절.
+
+### 수정
+
+- `src/trader/live_trader.py`:
+  - `_sync_position()`: 거래소에서 포지션 없음(`contracts=0` 또는 빈 응답)인데 내부 상태에
+    포지션이 있으면 WARNING 로그 후 내부 상태 초기화
+    (`self.position`, `_long_step`, `_short_step`, `_entry_price`, `_total_weight`, `_emergency_order_id`)
+  - `_execute_close()`: `-2022` 에러 발생 시 거래소 동기화 재실행 후, 포지션 없음이 확인되면
+    조용히 return (이미 청산됨). 포지션이 있으면 기존대로 에러 로그.
+
+> ⚠️ 2026-04-17 병합 시점에 main 코드로 포팅되지 않았다. home-pre-sync 브랜치 참조.
+
+## 2026-04-04 거래소 API 호출 내역 로그 기록
+
+### 개요
+
+실거래 중 거래소와의 모든 API 호출 내역을 `_file_logger`(trade_15m_YYYYMMDD.log)에 기록.
+
+### 수정
+
+- `src/exchange/base.py`:
+  - `audit_logger: logging.Logger | None` 속성 추가 (기본 None, 외부 주입)
+  - `_alog(level, msg)` 헬퍼: 내부 `logger`와 `audit_logger` 양쪽에 동시 기록, audit_logger는 `[API]` 접두사 추가
+  - 모든 API 메서드에 요청/응답 로그 추가:
+    - **INFO**: `set_leverage`, `set_margin_mode`, `create_market_order`, `create_stop_market_order`, `cancel_order`, `fetch_open_orders`, `get_max_leverage`, `get_fee_rates`
+    - **DEBUG**: `fetch_ohlcv`, `fetch_balance`, `fetch_positions`, `fetch_ticker`, `fetch_funding_history`, `get_min_amount`, `get_min_cost`
+
+- `src/trader/live_trader.py`:
+  - `_setup_exchange()`: `self.exchange.audit_logger = self._file_logger` 주입
+  - `_on_log_rotated()` 오버라이드: 날짜 교체 후 새 `_file_logger`를 재주입
+
+- `src/core/live_base.py`:
+  - `_on_log_rotated()` 빈 훅 추가 (`_rotate_log_if_needed` 내에서 호출)
+
+> ⚠️ 2026-04-17 병합 시점에 main 코드로 포팅되지 않았다. 로그 체계가 4/10 LogManager로 대체되어 재설계 필요. home-pre-sync 브랜치 참조.
+
+## 2026-04-04 거래소 최소수량/최소금액 조회 정확도 개선
+
+### 문제
+
+`market['limits']['amount']['min']`이 ccxt 캐시 기준값이라 실제 거래소 값과 다를 수 있음.
+예: SOL/USDT 최소수량 0.01로 표시되나 실제는 0.07.
+
+### 수정
+
+- `src/exchange/base.py` — `get_min_amount()`:
+  - `market['info']['filters']`에서 `LOT_SIZE.minQty` 우선 추출
+  - 없으면 기존 `limits.amount.min` 폴백
+- `src/exchange/base.py` — `get_min_cost()`:
+  - `market['info']['filters']`에서 `MIN_NOTIONAL` 또는 `NOTIONAL` 필터의 `notional`/`minNotional` 우선 추출
+  - 없으면 기존 `limits.cost.min` 폴백
+- 각 방법에 `(LOT_SIZE)` / `(MIN_NOTIONAL)` / `(limits)` 소스 표시를 DEBUG 로그에 추가
+
+> ⚠️ 2026-04-17 병합 시점에 main 코드로 포팅되지 않았다. home-pre-sync 브랜치 참조.
+
+## 2026-04-04 거래소 제약조건 조회 개선 (최대 레버리지)
+
+### 문제
+
+Binance Futures는 `market['limits']['leverage']['max']` 필드를 제공하지 않아
+`get_max_leverage()` 가 0을 반환 → 로그에 `최대레버리지=0x` 표시, 레버리지 클램핑 미작동.
+
+### 수정
+
+- `src/exchange/base.py` — `get_max_leverage()` 조회 로직 개선:
+  1. `market['limits']['leverage']['max']` 시도 (기존)
+  2. 없으면 `exchange.fetch_leverage_tiers([symbol])` 호출 → 티어 목록에서 `maxLeverage` 최댓값 추출
+  3. 둘 다 실패하면 0 반환 (기존과 동일)
+- `src/trader/live_trader.py` — `_setup_exchange()` 로그/경고 개선:
+  - 조회 성공: `최대레버리지=75x` 형태로 표시
+  - 조회 실패(0): `최대레버리지=조회실패(config값 사용)` 경고 출력 후 config 값 그대로 사용
+
+> ⚠️ 2026-04-17 병합 시점에 main 코드로 포팅되지 않았다. home-pre-sync 브랜치 참조.
+
+## 2026-04-04 로그 파일 날짜별 자동 교체 (KST 자정)
+
+### 문제
+
+자정을 넘겨도 시작 시 생성된 단일 로그 파일에 계속 기록.
+
+### 수정
+
+- `src/core/live_base.py`:
+  - 파일 로거 초기화 로직을 `_setup_file_logger(date_str)` 메서드로 추출
+  - 로그 파일명: `{prefix}_{tf}_{시간}.log` → `{prefix}_{tf}_{YYYYMMDD}.log` (날짜 기반)
+  - `_rotate_log_if_needed()` 추가: KST 날짜가 바뀌면 기존 핸들러를 닫고 새 날짜 폴더/파일로 교체
+  - `_tick()` 첫 줄에서 매 폴링마다 `_rotate_log_if_needed()` 호출
+  - 교체 시 DEBUG/INFO 로그에 `날짜 변경 (YYYYMMDD → YYYYMMDD)` 기록
+
+> ⚠️ 2026-04-17 병합 시점에 main 코드로 포팅되지 않았다. 4/10 LogManager에서 유사 기능이 이미 구현됐을 수 있으므로 중복 확인 후 포팅.
+
+## 2026-04-03 실거래 전략 상태 ↔ 거래소 포지션 불일치 보정
+
+### 문제
+
+워밍업(과거 캔들 replay)이 끝난 후 전략 내부 step 상태(예: Short 2단계)가
+실제 거래소 포지션(없음)과 불일치하면, 전략이 이미 포지션을 보유 중이라고
+판단해 새 진입 시그널을 생성하지 않는 현상 발생.
+
+### 수정
+
+- `src/trader/live_trader.py`:
+  - `_reconcile_strategy_state()` 메서드 추가
+  - `_on_initialized()`에서 `_print_status()` 호출 전 실행
+  - 세 가지 케이스 자동 보정:
+    - 거래소 포지션 없음인데 전략 step > 0 → step 초기화 (0/0)
+    - 거래소 Long 포지션인데 전략 long_step == 0 → step=1, 진입가 복원
+    - 거래소 Short 포지션인데 전략 short_step == 0 → step=1, 진입가 복원
+  - 불일치 시 WARNING 로그 출력
+
+> ⚠️ 2026-04-17 병합 시점에 main 코드로 포팅되지 않았다. home-pre-sync 브랜치 참조.
 
 ## 2026-04-03 실거래 매매결과 DB 저장
 

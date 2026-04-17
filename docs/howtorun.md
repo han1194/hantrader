@@ -165,6 +165,7 @@ BINANCE_TESTNET=true
 ```bash
 # 실거래 실행 (실행 전 "yes" 확인 필요)
 python -m src.main trade -e binance_futures -s BTC/USDT -t 1h
+python -m src.main trade -e binance_futures -s BTC/USDT -t 1h --capital 100
 
 # 일일 손실 제한 설정
 python -m src.main trade -e binance_futures -s BTC/USDT --daily-loss-limit 50
