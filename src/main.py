@@ -185,6 +185,20 @@ def cmd_backtest(args, cfg: AppConfig):
 
     log = LogManager.instance().bind()
 
+    # 자동 수집: DB 마지막 시점부터 최신까지 이어서 수집 (CSV도 함께 출력)
+    if not getattr(args, "no_auto_collect", False):
+        try:
+            log.info(f"자동 수집: {exchange} {symbols} (DB 마지막 이후 → {args.end or '최신'})")
+            collector = DataCollector(args.config)
+            collector.collect(
+                exchange_name=exchange,
+                symbols=symbols,
+                start=None,
+                end=args.end,
+            )
+        except Exception as e:
+            log.warning(f"자동 수집 실패 ({e}), 기존 DB 데이터로 백테스트 진행")
+
     for symbol in symbols:
         log.info(
             f"백테스트 시작: {exchange}/{symbol} ({timeframe}) "
@@ -242,7 +256,14 @@ def cmd_backtest(args, cfg: AppConfig):
             log.info(f"{symbol}: 생성된 시그널이 없습니다.")
             continue
 
-        # 4. 백테스트 실행
+        # 4. 백테스트 실행 — 이전 결과 비우고 새로 저장
+        try:
+            cleared = db.clear_trades(exchange, symbol, mode="backtest", timeframe=timeframe)
+            if cleared:
+                log.info(f"이전 backtest_trades {cleared}건 삭제 후 재실행")
+        except Exception as e:
+            log.warning(f"backtest_trades 초기화 실패: {e}")
+
         engine = BacktestEngine(
             initial_capital=initial_capital,
             min_investment=min_investment,
@@ -250,6 +271,9 @@ def cmd_backtest(args, cfg: AppConfig):
             margin_pct=bt.margin_pct,
             exchange=exchange,
             symbol=symbol,
+            timeframe=timeframe,
+            db=db,
+            save_mode="backtest",
         )
         trades = engine.run(signals, df)
         equity_df = engine.get_equity_df()
@@ -278,6 +302,29 @@ def cmd_backtest(args, cfg: AppConfig):
                 strategy_config=cfg.strategy, backtest_config=bt,
             )
             log.info(f"대시보드: file:///{dashboard_path.resolve()}")
+
+        # 차트 생성 (캔들 + 매매 시그널 + 포지션 구간)
+        try:
+            from src.visualize import TradeChart
+            from src.visualize.chart import trades_to_position_spans
+            chart = TradeChart(
+                exchange=exchange, symbol=symbol, timeframe=timeframe,
+                bb_period=cfg.strategy.bb_period, bb_std=cfg.strategy.bb_std,
+            )
+            safe_symbol = symbol.replace("/", "_")
+            date_dir = datetime.now().strftime("%Y%m%d")
+            chart_dir = Path(bt.output_dir) / date_dir / safe_symbol
+            chart_path = chart.render(
+                df=df,
+                signals=signals,
+                position_spans=trades_to_position_spans(trades),
+                equity_df=equity_df,
+                output_dir=chart_dir,
+                title_suffix="backtest",
+            )
+            log.info(f"차트: file:///{chart_path.resolve()}")
+        except Exception as e:
+            log.warning(f"차트 생성 실패: {e}")
 
         if len(symbols) > 1:
             print(f"\n{'='*80}\n")
@@ -308,6 +355,7 @@ def cmd_simulate(args, cfg: AppConfig):
         sideways_leverage_max=resolved["sideways_leverage_max"],
     )
 
+    db = DatabaseStorage(cfg.storage.db_path)
     simulator = LiveSimulator(
         exchange=exchange,
         exchange_name=exc_name,
@@ -321,6 +369,7 @@ def cmd_simulate(args, cfg: AppConfig):
         log_dir=resolved["log_dir"],
         strategy_kwargs=strategy_kwargs,
         strategy_name=cfg.strategy.name,
+        db=db,
     )
 
     simulator.run(poll_interval=args.interval)
@@ -471,6 +520,80 @@ def cmd_export(args, cfg: AppConfig):
     print(f"기간: {df.index[0]} ~ {df.index[-1]}")
 
 
+def cmd_chart(args, cfg: AppConfig):
+    """DB에 저장된 OHLCV + 매매기록으로 차트 HTML을 생성한다.
+
+    --mode로 대상 매매기록 테이블 선택:
+      trader(기본) → trades 테이블 (실거래)
+      backtest    → backtest_trades 테이블
+      simulator   → simulator_trades 테이블
+    """
+    from src.visualize import TradeChart
+    from src.visualize.chart import (
+        trades_df_to_position_spans, trades_df_to_signals,
+    )
+
+    db = DatabaseStorage(cfg.storage.db_path)
+    exchange = args.exchange
+    symbol = _normalize_symbol(args.symbol, exchange)
+    timeframe = args.timeframe or cfg.backtest.timeframe
+    mode = getattr(args, "mode", "trader") or "trader"
+    log = LogManager.instance().bind()
+
+    # OHLCV 로드 (필요 시 base TF에서 리샘플링)
+    df = db.load_ohlcv(exchange, symbol, timeframe, start=args.start, end=args.end)
+    if df.empty:
+        base_tf = cfg.collector.base_timeframe
+        log.info(f"{timeframe} 데이터 없음, {base_tf}에서 리샘플링 시도")
+        df_base = db.load_ohlcv(exchange, symbol, base_tf, start=args.start, end=args.end)
+        if df_base.empty:
+            log.warning(f"데이터 없음: {exchange}/{symbol}")
+            return
+        from src.utils.timeframe import resample_ohlcv
+        df = resample_ohlcv(df_base, timeframe)
+        if df.empty:
+            log.warning(f"리샘플링 결과 없음: {timeframe}")
+            return
+
+    # --start 미지정 시 최근 N캔들만 표시 (HTML 용량 제한)
+    limit = getattr(args, "limit", 2000)
+    if not args.start and limit and len(df) > limit:
+        df = df.tail(limit)
+        log.info(f"최근 {limit}캔들로 제한 ({df.index[0]} ~ {df.index[-1]})")
+
+    # 매매 기록 로드: mode별 테이블에서 (backtest/simulator는 timeframe 필터링)
+    tf_filter = timeframe if mode in ("backtest", "simulator") else None
+    trades_df = db.load_trades(
+        exchange, symbol, start=args.start, end=args.end,
+        mode=mode, timeframe=tf_filter,
+    )
+    signals = trades_df_to_signals(trades_df) if not trades_df.empty else []
+    spans = trades_df_to_position_spans(trades_df) if not trades_df.empty else []
+
+    if trades_df.empty:
+        log.warning(
+            f"매매 기록 없음 ({mode}): {db.TRADE_TABLES[mode]} 테이블에 "
+            f"{exchange}/{symbol}"
+            + (f"/{timeframe}" if tf_filter else "")
+            + " 데이터 없음 — OHLCV만 표시됨"
+        )
+
+    chart = TradeChart(
+        exchange=exchange, symbol=symbol, timeframe=timeframe,
+        bb_period=cfg.strategy.bb_period, bb_std=cfg.strategy.bb_std,
+    )
+    safe_symbol = symbol.replace("/", "_")
+    out_dir = args.output or f"data/charts/{mode}/{safe_symbol}"
+    path = chart.render(
+        df=df, signals=signals, position_spans=spans,
+        output_dir=out_dir, title_suffix=f"{mode}-history",
+    )
+    print(f"\n차트 생성 완료: {path}")
+    print(f"모드: {mode} (테이블: {db.TRADE_TABLES[mode]})")
+    print(f"기간: {df.index[0]} ~ {df.index[-1]} ({len(df)}캔들)")
+    print(f"시그널: {len(signals)}건, 포지션: {len(spans)}건")
+
+
 def cmd_list_exchanges(args, cfg: AppConfig):
     """지원 거래소 목록 출력."""
     from src.exchange import ExchangeWrapper
@@ -515,6 +638,8 @@ def main():
     bt_parser.add_argument("--min-investment", type=float, default=None, help="최소 투자 수량 (코인)")
     bt_parser.add_argument("--leverage-max", type=int, default=None, help="최대 레버리지")
     bt_parser.add_argument("--leverage-min", type=int, default=None, help="최소 레버리지")
+    bt_parser.add_argument("--no-auto-collect", action="store_true",
+                           help="백테스트 전 자동 수집 비활성화 (기본: 활성화)")
 
     # simulate 명령어
     sim_parser = subparsers.add_parser("simulate", help="라이브 시뮬레이터 (페이퍼 트레이딩)")
@@ -548,6 +673,20 @@ def main():
     export_parser.add_argument("--end", help="종료일 (ISO format)")
     export_parser.add_argument("--output", "-o", default=None, help="출력 디렉토리")
 
+    # chart 명령어
+    chart_parser = subparsers.add_parser("chart", help="OHLCV + 매매기록으로 HTML 차트 생성")
+    chart_parser.add_argument("--exchange", "-e", required=True, help="거래소 이름")
+    chart_parser.add_argument("--symbol", "-s", required=True, help="심볼")
+    chart_parser.add_argument("--timeframe", "-t", default=None, help="타임프레임")
+    chart_parser.add_argument("--start", help="시작일 (ISO format)")
+    chart_parser.add_argument("--end", help="종료일 (ISO format)")
+    chart_parser.add_argument("--limit", type=int, default=2000,
+                              help="최근 N캔들만 (--start 미지정 시 적용, 기본 2000)")
+    chart_parser.add_argument("--mode", choices=["trader", "backtest", "simulator"],
+                              default="trader",
+                              help="매매 기록 조회 대상 (기본: trader — 실거래 trades 테이블)")
+    chart_parser.add_argument("--output", "-o", default=None, help="출력 디렉토리")
+
     # list-exchanges 명령어
     subparsers.add_parser("list-exchanges", help="지원 거래소 목록")
 
@@ -571,6 +710,7 @@ def main():
         "simulate": cmd_simulate,
         "trade": cmd_trade,
         "export": cmd_export,
+        "chart": cmd_chart,
         "list-exchanges": cmd_list_exchanges,
     }
 

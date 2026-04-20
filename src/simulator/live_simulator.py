@@ -12,6 +12,7 @@ import pandas as pd
 from src.backtest.engine import BacktestEngine
 from src.core.live_base import LiveEngineBase
 from src.exchange import ExchangeWrapper
+from src.storage import DatabaseStorage
 from src.strategy.base import Signal
 from src.utils.timeframe import KST
 
@@ -43,6 +44,7 @@ class LiveSimulator(LiveEngineBase):
         log_dir: str = "data/simulator",
         strategy_kwargs: dict | None = None,
         strategy_name: str = "bb",
+        db: DatabaseStorage | None = None,
     ):
         super().__init__(
             exchange=exchange,
@@ -58,12 +60,17 @@ class LiveSimulator(LiveEngineBase):
             sideways_leverage_max=sideways_leverage_max,
         )
 
-        # 백테스트 엔진 (가상 매매용)
+        # 백테스트 엔진 (가상 매매용) — simulator 모드로 DB 저장
         self.engine = BacktestEngine(
             initial_capital=initial_capital,
             min_investment=min_investment,
             max_margin_per_entry=max_margin_per_entry,
             margin_pct=margin_pct,
+            exchange=exchange_name,
+            symbol=symbol,
+            timeframe=timeframe,
+            db=db,
+            save_mode="simulator",
         )
         self.engine.capital = initial_capital
         self.engine.initial_capital = initial_capital
@@ -193,6 +200,22 @@ class LiveSimulator(LiveEngineBase):
             csv_path = csv_dir / f"trades_{self.timeframe}_{ts}.csv"
             trades_df.to_csv(csv_path, index=False)
             self.log.trade(f"거래 내역 CSV 저장: {csv_path}")
+
+    # ------------------------------------------------------------------
+    # 차트 데이터 제공 (LiveEngineBase._render_chart 훅)
+    # ------------------------------------------------------------------
+
+    def _get_position_spans(self) -> list:
+        from src.visualize.chart import trades_to_position_spans
+        return trades_to_position_spans(list(self.engine.closed_trades))
+
+    def _get_equity_df(self):
+        df = self.engine.get_equity_df()
+        return df if df is not None and not df.empty else None
+
+    def _get_chart_output_dir(self) -> str:
+        safe_symbol = self.symbol.replace("/", "_")
+        return str(self._csv_dir / safe_symbol / "charts")
 
     # ------------------------------------------------------------------
     # 내부 헬퍼

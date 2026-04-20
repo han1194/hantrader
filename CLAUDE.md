@@ -32,6 +32,7 @@ hantrader/
 │   ├── trader/           # 실거래 트레이더 (LiveEngineBase 상속, Binance Futures 실주문)
 │   ├── indicators/       # ta 기술적 지표 래퍼
 │   ├── storage/          # DB 저장, CSV 내보내기
+│   ├── visualize/        # 공통 HTML 차트 생성기 (plotly 캔들 + 시그널 화살표 + 포지션 음영)
 │   └── utils/            # LogManager (카테고리별 로깅), 타임프레임 리샘플링
 ├── data/
 │   ├── db/               # SQLite DB 파일
@@ -41,7 +42,8 @@ hantrader/
 │   │   ├── system/       # 시스템 로그 (시작/종료, 설정, 에러)
 │   │   └── {exchange}/{SYMBOL}/{날짜}/{mode}/  # trade/asset/signal/market/all.log
 │   │       # mode: trade(실거래), sim(시뮬레이터), backtest(백테스트)
-│   └── trader/           # 실거래 상태, 거래내역 CSV
+│   ├── trader/           # 실거래 상태, 거래내역 CSV
+│   └── charts/           # `chart` 명령으로 생성한 HTML 차트
 └── docs/
     ├── howtorun.md       # 실행 가이드 (CLI 명령어, 옵션, 전략 규칙)
     ├── CHANGELOG.md      # 변경 이력 (날짜별 개선/수정 기록)
@@ -87,9 +89,15 @@ hantrader/
 - BB MTF 전략: 기준 TF 위/아래 인접 TF 국면을 가중 투표로 합산, 허위 국면 전환 필터링 (예: 1h → 30m/2h 참고)
 - BB V2 전략: BBW 최소 기준(`min_bbw_for_sideways`) + 추세 물타기 최소 간격(`min_entry_interval`) 추가, 기존 BB 전략 상속
 - BB V2 MTF 전략: BB V2 + MTF 국면 판단 결합
-- 실거래 매매 결과는 DB에 저장 (trades 테이블: 매매 기록, asset_history 테이블: 자산 이력 스냅샷)
-- trades: 시간, 코인, 방향, 액션, 가격, 수량, 총금액, 수수료, 펀딩비, 레버리지, 마진, 수익(률), 미실현수익(률) 등
-- asset_history: 이벤트별(시작/진입/청산/동기화/종료) 잔고, 평가금, 포지션 상태, 누적 수수료/펀딩비, 일일 PnL, 청산가
+- 매매 기록 DB 저장: 모드별로 3개 테이블에 분리 저장 — 실거래=`trades`, 백테스트=`backtest_trades`, 시뮬레이터=`simulator_trades` (모두 동일 스키마)
+- `DatabaseStorage.TRADE_TABLES` dict로 모드→테이블 매핑, `save_trade(..., mode=...)` / `load_trades(..., mode=...)` / `clear_trades(exchange, symbol, mode, timeframe=...)` 제공
+- `BacktestEngine`은 `db`/`save_mode`/`timeframe` 인자로 DB 저장 활성화 (main.py가 `db`, `save_mode="backtest"` 주입, 실행 전 이전 결과 `clear_trades`)
+- `LiveSimulator`는 내부 `BacktestEngine`에 `save_mode="simulator"` 전달 → simulator_trades 테이블에 누적 저장 (세션간 보존)
+- asset_history: 이벤트별(시작/진입/청산/동기화/종료) 잔고, 평가금, 포지션 상태, 누적 수수료/펀딩비, 일일 PnL, 청산가 — 실거래 전용
+- 차트 시각화: `src/visualize/TradeChart` — plotly 캔들스틱 + BB 상/중/하단 + 매매 시그널 화살표(▲LONG/▼SHORT/■청산/✖손절/★익절) + 포지션 보유 구간 배경 음영(long=초록/short=빨강) + equity curve
+- 차트 자동 생성: 백테스트는 리포트 이후 자동, 시뮬레이터/트레이더는 종료 시(`_save_summary`) 자동 — 모두 in-memory 시그널로 렌더링
+- `chart` CLI로 DB에서 on-demand 생성 — `--mode {trader,backtest,simulator}` (기본 trader)로 조회 테이블 선택, `--timeframe` 필터
+- 차트 저장 경로: 백테스트=`data/backtest/{날짜}/{SYMBOL}/chart_*.html`, 시뮬레이터=`data/simulator/{SYMBOL}/charts/`, 트레이더=`data/trader/{SYMBOL}/charts/`, chart CLI=`data/charts/{mode}/{SYMBOL}/`
 
 ## 현재 구현 상태
 
@@ -102,6 +110,7 @@ hantrader/
 - [x] BB V2 / BB V2 MTF 전략 (BBW 최소 기준 + 물타기 간격 제한, bb_v2/bb_v2_mtf)
 - [~] 업비트 거래소 지원 (`src/exchange/upbit.py` — 2026-04-17 병합 시점에 파일만 포팅됨, 팩토리/심볼정규화/인증 코드 통합 필요)
 - [x] 백테스트 엔진 (시뮬레이션, 평가 지표, 텍스트/HTML 리포트, 국면별/방향별 분석 통계)
+- [x] 백테스트 자동 수집 (실행 전 DB 마지막 시점 → 최신까지 이어서 수집 + CSV 출력, `--no-auto-collect`로 비활성화)
 - [x] 라이브 시뮬레이터 (실시간 데이터 + 가상 매매 페이퍼 트레이딩)
 - [x] 실거래 트레이더 (Binance Futures, .env API 키, 격리마진, 일일손실제한)
 - [x] 실거래 상태 저장/복원 (재시작 시 데이터 보존, --capital 명시로 초기화)
@@ -110,6 +119,7 @@ hantrader/
 - [x] 시작 시 즉시 매매 판단 (재시작/접속 복귀 시 timeframe 대기 없이 1회 즉시 실행)
 - [x] Emergency stop order (진입/추매마다 거래소 서버사이드 STOP_MARKET 등록, 마진 콜 방지)
 - [x] 실거래 매매결과 DB 저장 (trades 테이블 + asset_history 테이블, SQLite)
+- [x] 차트 시각화 (plotly HTML — 캔들 + BB + 매매 시그널 화살표 + 포지션 음영 + equity curve, 백테스트/시뮬레이터/트레이더/chart CLI 공통)
 - [ ] 포트폴리오 최적화
 - [ ] 리스크 관리
 - [ ] 성과 모니터링
@@ -139,6 +149,12 @@ python -m src.main simulate -e binance_futures -s btc -t 1h
 python -m src.main trade -e binance_futures -s btc -t 1h
 python -m src.main trade -e binance_futures -s btc --daily-loss-limit 50
 python -m src.main trade -e binance_futures -s btc --capital 100 --capital-mode virtual
+
+# 차트 생성 (DB OHLCV + 매매기록으로 HTML 차트, 최근 2000캔들 기본)
+python -m src.main chart -e binance_futures -s btc -t 1h                    # trader(trades)
+python -m src.main chart -e binance_futures -s btc -t 1h --mode backtest    # backtest_trades
+python -m src.main chart -e binance_futures -s btc -t 1h --mode simulator   # simulator_trades
+python -m src.main chart -e binance_futures -s btc -t 1h --start 2026-03-01 --end 2026-04-01
 
 # 거래소 목록
 python -m src.main list-exchanges

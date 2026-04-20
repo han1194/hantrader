@@ -1,5 +1,112 @@
 # HanTrader 변경 이력
 
+## 2026-04-20 매매 기록 DB 분리 저장 (3개 테이블) + chart CLI 모드별 조회
+
+차트에서 백테스트/시뮬/실거래의 매매 기록을 모두 재조회할 수 있도록 DB 저장 구조를 확장.
+
+### 스키마 변경
+
+- `DatabaseStorage.TRADE_TABLES = {"trader": "trades", "backtest": "backtest_trades", "simulator": "simulator_trades"}` — 동일 스키마 3개 테이블
+- 기존 `trades` 테이블은 실거래 전용으로 유지 (하위 호환), `backtest_trades` / `simulator_trades` 신설
+- `save_trade(..., mode="trader")` / `load_trades(..., mode=..., timeframe=...)` / `clear_trades(exchange, symbol, mode, timeframe=...)` 메서드
+
+### 저장 경로
+
+- `BacktestEngine(..., db=..., save_mode="backtest", timeframe=...)` — 각 이벤트(entry/add/exit/stop_loss) 저장, 부분 손절 포함
+- `LiveSimulator(..., db=...)` — 내부 엔진에 `save_mode="simulator"` 전달
+- `LiveTrader`는 기존대로 `save_trade()` 기본 `mode="trader"` 유지
+- 백테스트 실행 시 main.py가 `clear_trades(mode="backtest", timeframe=...)`로 이전 결과 제거 후 재실행
+
+### chart CLI 변경
+
+- `--mode {trader,backtest,simulator}` 플래그 추가 (기본: trader)
+- 출력 경로: `data/charts/{mode}/{SYMBOL}/chart_*_{mode}-history_*.html`
+- backtest/simulator 모드는 `--timeframe`으로 해당 TF 매매기록만 필터링
+- 매매 기록이 없을 때 WARNING 출력 후 OHLCV만 표시
+
+### 수정 파일
+
+- `src/storage/database.py` — 3-table schema, mode 라우팅
+- `src/backtest/engine.py` — `_save_db_event` 헬퍼 + 진입/청산/부분손절 훅
+- `src/simulator/live_simulator.py` — db/save_mode 주입
+- `src/main.py` — cmd_backtest/cmd_simulate/cmd_chart 수정, `--mode` 인자 추가
+- `CLAUDE.md`, `docs/howtorun.md` — 문서화
+
+---
+
+## 2026-04-20 매매 차트 시각화 추가 (plotly HTML)
+
+백테스트/시뮬레이터/실거래에서 공통으로 사용하는 HTML 차트 생성기를 구현한다.
+
+### 주요 기능
+
+- 캔들스틱 + Bollinger Bands(상/중/하단) 오버레이
+- 매매 시그널을 종류별 마커로 표시
+  - ▲ (초록, 캔들 아래): LONG 진입/매수
+  - ▼ (빨강, 캔들 위): SHORT 진입/매도
+  - ■ (노랑): LONG/SHORT 청산
+  - ✖ (자주): 손절
+  - ★ (하늘): 익절
+- 포지션 보유 구간 배경 음영 (long=초록 / short=빨강) + 평단가 점선
+- Equity curve 하단 서브플롯 (백테스트/시뮬레이터)
+- plotly dark 테마, hover 툴팁으로 시각/가격/사유 표시
+
+### 통합 지점
+
+- **백테스트**: 리포트 생성 후 자동 차트 생성 (`data/backtest/{날짜}/{SYMBOL}/chart_*.html`)
+- **시뮬레이터**: 종료 시 자동 (`data/simulator/{SYMBOL}/charts/`)
+- **트레이더**: 종료 시 자동 (`data/trader/{SYMBOL}/charts/`)
+- **`chart` CLI 명령**: DB에 저장된 OHLCV + trades 테이블로 on-demand 생성 (`data/charts/{SYMBOL}/`)
+
+```bash
+# 최근 2000캔들 기본
+python -m src.main chart -e binance_futures -s btc -t 1h
+
+# 기간 지정
+python -m src.main chart -e binance_futures -s btc -t 1h --start 2026-03-01 --end 2026-04-01
+
+# 캔들 수 조정
+python -m src.main chart -e binance_futures -s btc -t 1h --limit 500
+```
+
+### 추가/변경 파일
+
+- `src/visualize/__init__.py`, `src/visualize/chart.py`: 공통 차트 생성기 (`TradeChart`, `PositionSpan`)
+  - `trades_to_position_spans()`: 백테스트 Trade → PositionSpan
+  - `trade_records_to_position_spans()`: 트레이더 TradeRecord → PositionSpan
+  - `trades_df_to_position_spans()`, `trades_df_to_signals()`: DB trades 테이블 → PositionSpan/Signal
+- `src/core/live_base.py`: 시그널/df 캐싱, `_render_chart()` 훅 (서브클래스가 포지션 구간/equity 제공)
+- `src/simulator/live_simulator.py`: `_get_position_spans/_get_equity_df/_get_chart_output_dir` 구현
+- `src/trader/live_trader.py`: 동일 훅 구현 (TradeRecord 기반)
+- `src/main.py`: 백테스트 흐름에 차트 생성 추가, `chart` 서브커맨드 추가
+- `docs/howtorun.md`, `CLAUDE.md`: 차트 사용법 기록
+
+### 의존성
+
+- `plotly >= 5.0` (이미 anaconda 기본 환경에 포함)
+
+## 2026-04-20 백테스트 실행 전 자동 데이터 수집 추가
+
+- `backtest` 명령어가 실행 전에 `DataCollector`를 호출하여 DB 마지막 시점부터 최신(또는 `--end`)까지 자동으로 이어서 수집
+- 수집 과정에서 CSV도 함께 출력 (기존 `DataCollector._collect_symbol` 동작 그대로)
+- 매일 백테스트를 돌릴 때 하루치 데이터 때문에 `collect` → `backtest` 2단계로 실행할 필요가 없어짐
+- 수집 실패(네트워크/거래소 오류) 시 경고만 출력하고 기존 DB 데이터로 백테스트 진행
+- `--no-auto-collect` 플래그로 비활성화 가능 (오프라인 재현 등)
+
+### 변경 파일
+
+- `src/main.py`: `cmd_backtest`에 자동 수집 블록 추가, `--no-auto-collect` 인자 추가
+- `docs/howtorun.md`: 백테스트 섹션에 자동 수집 설명 추가
+- `CLAUDE.md`: 구현 상태 항목 추가
+
+## 2026-04-20 Git 가이드에 회사↔집 동기화 체크리스트 추가
+
+- `docs/git_guide.md`에 "3-5. 회사 ↔ 집 PC 동기화 체크리스트" 섹션 추가
+- 작업 시작 전(A): 상태 확인 → 로컬 변경 처리 → `git pull --rebase` → stash 복원
+- 작업 종료 후(B): 확인 → 커밋 → github/usb 양쪽 push → (선택) 해시 일치 확인
+- 자주 만나는 상황(behind/ahead/LF-CRLF/reject/conflict)별 의미와 대처 표
+- 피해야 할 패턴 4가지 명시 (pull 없이 작업, 커밋 없이 pull, 한쪽 원격만 push, 커밋 누적)
+
 ## 2026-04-17 Git 저장소 초기화 및 원격 저장소 연결
 
 - Git 초기화, 첫 커밋 생성

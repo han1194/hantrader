@@ -69,6 +69,10 @@ class LiveEngineBase(ABC):
         self._running = False
         self._tick_count = 0
 
+        # 차트용: 최근 df 및 실행된 시그널 기록
+        self._last_df: pd.DataFrame | None = None
+        self._recorded_signals: list[Signal] = []
+
         # 전략 포지션 상태 (generate_signals 내부 상태를 직접 관리)
         self._long_step = 0
         self._short_step = 0
@@ -204,7 +208,9 @@ class LiveEngineBase(ABC):
                 f"캔들={last_ts} | ticker={ticker_price:,.2f}"
             )
             self._execute_new_signals(init_signals)
+            self._recorded_signals.extend(init_signals)
 
+        self._last_df = df
         self._on_initialized()
 
     # ------------------------------------------------------------------
@@ -269,6 +275,9 @@ class LiveEngineBase(ABC):
 
         # 서브클래스에서 구현하는 시그널 실행
         self._execute_new_signals(new_signals)
+        self._recorded_signals.extend(new_signals)
+
+        self._last_df = df
 
         price = self._get_current_price(df)
         self._print_status(price, new_candle=True)
@@ -514,6 +523,56 @@ class LiveEngineBase(ABC):
         self.log.system(f"{self._title} 종료 요약 | 실행시간={elapsed} 캔들={self._tick_count}개")
         self._save_summary_body(summary)
         self._save_trades_csv()
+        self._render_chart()
+
+    # ------------------------------------------------------------------
+    # 차트 (서브클래스에서 포지션 구간 제공)
+    # ------------------------------------------------------------------
+
+    def _render_chart(self):
+        """실행 중 기록된 시그널/포지션으로 HTML 차트를 생성한다.
+
+        서브클래스가 `_get_position_spans()`를 구현하면 포지션 보유 구간이
+        배경 음영으로 표시된다. df가 없거나 시그널이 0건이어도 차트는 생성.
+        """
+        try:
+            if self._last_df is None or self._last_df.empty:
+                return
+            from src.visualize import TradeChart
+            chart = TradeChart(
+                exchange=self.exchange_name, symbol=self.symbol,
+                timeframe=self.timeframe,
+                bb_period=getattr(self.strategy, "bb_period", 20),
+                bb_std=getattr(self.strategy, "bb_std", 2.0),
+            )
+            spans = self._get_position_spans()
+            equity_df = self._get_equity_df()
+            out_dir = self._get_chart_output_dir()
+            path = chart.render(
+                df=self._last_df,
+                signals=self._recorded_signals,
+                position_spans=spans,
+                equity_df=equity_df,
+                output_dir=out_dir,
+                title_suffix=self._log_prefix,
+            )
+            self.log.system(f"차트: file:///{path.resolve()}")
+        except Exception as e:
+            self.log.system(f"차트 생성 실패: {e}", level="WARNING", exc_info=True)
+
+    def _get_position_spans(self) -> list:
+        """포지션 보유 구간 리스트를 반환한다. 서브클래스에서 오버라이드."""
+        return []
+
+    def _get_equity_df(self) -> pd.DataFrame | None:
+        """equity curve DataFrame을 반환한다. 서브클래스에서 오버라이드."""
+        return None
+
+    def _get_chart_output_dir(self) -> str:
+        """차트 저장 디렉토리를 반환한다. 서브클래스에서 오버라이드."""
+        from pathlib import Path
+        safe_symbol = self.symbol.replace("/", "_")
+        return str(Path("data") / "charts" / self._log_prefix / safe_symbol)
 
     # ------------------------------------------------------------------
     # 추상/훅 메서드 — 서브클래스에서 구현

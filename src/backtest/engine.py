@@ -67,6 +67,9 @@ class BacktestEngine:
         margin_pct: float = 0.0,
         exchange: str = "",
         symbol: str = "",
+        timeframe: str = "",
+        db: "object | None" = None,
+        save_mode: str = "backtest",
     ):
         self.initial_capital = initial_capital
         self.min_investment = min_investment  # 최소 투자 수량 (코인 단위)
@@ -78,6 +81,12 @@ class BacktestEngine:
         self.equity_curve: list[dict] = []
         self._trade_counter = 0
         self._position_counter = 0
+        # DB 저장: backtest → backtest_trades, simulator → simulator_trades
+        self._exchange_for_db = exchange
+        self._symbol_for_db = symbol
+        self._timeframe_for_db = timeframe
+        self._db = db
+        self._save_mode = save_mode
         self.log: HanLogger = LogManager.instance().bind(exchange, symbol, mode="backtest")
 
     def run(self, signals: list[Signal], ohlcv: pd.DataFrame) -> list[Trade]:
@@ -232,6 +241,14 @@ class BacktestEngine:
         self.position.trades.append(trade)
         self.capital -= margin
 
+        action = "entry" if signal.entry_step == 1 else "add"
+        self._save_db_event(
+            action=action, ts=signal.timestamp, price=signal.price,
+            side=side, leverage=signal.leverage,
+            margin=margin, quantity=quantity,
+            reason=signal.reason, entry_step=signal.entry_step,
+        )
+
     def _close_position(
         self, timestamp: pd.Timestamp, price: float, reason: str,
         exit_metadata: dict | None = None,
@@ -277,6 +294,17 @@ class BacktestEngine:
             level="DEBUG",
         )
 
+        # DB 저장: 전체 청산 이벤트
+        is_stop = self._is_stop_reason(reason)
+        total_qty = sum(t.quantity for t in pos.trades) or (pos.total_margin * pos.leverage / price if price else 0)
+        self._save_db_event(
+            action="stop_loss" if is_stop else "exit",
+            ts=timestamp, price=price, side=pos.side,
+            leverage=pos.leverage, margin=pos.total_margin,
+            quantity=total_qty, pnl=pnl, pnl_pct=pnl_pct,
+            reason=reason, entry_step=pos.entry_steps,
+        )
+
         self.position = Position()
 
     def _handle_stop_loss(self, signal: Signal):
@@ -309,8 +337,78 @@ class BacktestEngine:
                 level="DEBUG",
             )
 
+            # DB 저장: 부분 손절 이벤트 (포지션 유지)
+            close_qty = close_margin * pos.leverage / signal.price if signal.price else 0
+            self._save_db_event(
+                action="stop_loss", ts=signal.timestamp, price=signal.price,
+                side=pos.side, leverage=pos.leverage,
+                margin=close_margin, quantity=close_qty,
+                pnl=pnl, pnl_pct=pnl_pct,
+                reason=f"부분손절 {signal.stop_loss_ratio:.0%} | {signal.reason}",
+                entry_step=pos.entry_steps,
+            )
+
             if pos.total_margin <= 0:
                 self.position = Position()
+
+    # ------------------------------------------------------------------
+    # DB 저장 헬퍼 (backtest / simulator 공통 엔진이므로 여기에 둠)
+    # ------------------------------------------------------------------
+
+    _STOP_KEYWORDS = ("손절", "stop", "강제청산", "소진")
+
+    def _is_stop_reason(self, reason: str) -> bool:
+        r = (reason or "").lower()
+        return any(k.lower() in r for k in self._STOP_KEYWORDS)
+
+    def _save_db_event(
+        self,
+        action: str,
+        ts: pd.Timestamp,
+        price: float,
+        side: str,
+        leverage: int,
+        margin: float,
+        quantity: float,
+        pnl: float = 0.0,
+        pnl_pct: float = 0.0,
+        reason: str = "",
+        entry_step: int = 1,
+    ):
+        """매매 이벤트를 DB에 저장한다. db가 없으면 no-op."""
+        if self._db is None:
+            return
+        try:
+            ts_str = (
+                ts.strftime("%Y-%m-%d %H:%M:%S+09:00")
+                if isinstance(ts, pd.Timestamp) else str(ts)
+            )
+            self._db.save_trade(
+                exchange=self._exchange_for_db,
+                symbol=self._symbol_for_db,
+                timeframe=self._timeframe_for_db,
+                datetime_str=ts_str,
+                side=side,
+                action=action,
+                price=float(price),
+                quantity=float(quantity),
+                amount=float(quantity) * float(price),
+                leverage=int(leverage),
+                margin=float(margin),
+                pnl=float(pnl),
+                pnl_pct=float(pnl_pct),
+                reason=str(reason),
+                entry_step=int(entry_step),
+                mode=self._save_mode,
+            )
+        except Exception as e:
+            try:
+                self.log.system(
+                    f"DB 저장 실패 ({self._save_mode}): {e}",
+                    level="WARNING",
+                )
+            except Exception:
+                pass
 
     def _record_equity(self, timestamp: pd.Timestamp, price: float):
         """equity curve 기록."""

@@ -77,7 +77,7 @@ storage:
 # name: "bb", "bb_mtf", "bb_v2", "bb_v2_mtf"
 # bb_v2/bb_v2_mtf: BBW 최소 기준 + 물타기 간격 제한 추가
 strategy:
-  name: "bb_v2_mtf"                      # "bb" / "bb_mtf" / "bb_v2" / "bb_v2_mtf"
+  name: "bb_v2"                      # "bb" / "bb_mtf" / "bb_v2" / "bb_v2_mtf"
   # Bollinger Bands 기본
   bb_period: 20
   bb_std: 2.0

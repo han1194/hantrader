@@ -84,6 +84,91 @@ git push usb main            # USB에 올리기 (USB 꽂은 상태)
                                               → git push usb main
 ```
 
+### 3-5. 회사 ↔ 집 PC 동기화 체크리스트
+
+같은 프로젝트를 회사/집 두 PC에서 번갈아 작업할 때, 아래 순서를 지키면 충돌/유실을 방지할 수 있다.
+
+#### A. 작업 시작 전 (해당 PC에서)
+
+1. **로컬 & 원격 상태 확인**
+
+    ```bash
+    git status                            # 로컬에 커밋 안 된 변경이 있는지
+    git fetch github                      # 원격 최신 정보 가져오기 (변경 적용 X)
+    git log HEAD..github/main --oneline   # 원격이 앞서 있는 커밋 (내가 아직 pull 안 한 것)
+    git log github/main..HEAD --oneline   # 로컬이 앞서 있는 커밋 (내가 아직 push 안 한 것)
+    ```
+
+2. **로컬에 커밋 안 된 변경이 있으면** 먼저 처리한다.
+
+    ```bash
+    # (권장) 직전 PC에서 덜 끝낸 작업이면 커밋
+    git add .
+    git commit -m "이전 작업 마무리"
+
+    # 또는 임시 저장
+    git stash
+    ```
+
+3. **원격 내용 가져오기 (rebase 권장 — 불필요한 머지 커밋 방지)**
+
+    ```bash
+    git pull --rebase github main
+    # 충돌 시: 파일 수정 후
+    git add .
+    git rebase --continue
+    ```
+
+4. **stash 했다면 복원**
+
+    ```bash
+    git stash pop
+    ```
+
+#### B. 작업 끝난 후 (해당 PC에서)
+
+1. **변경 내용 확인**
+
+    ```bash
+    git status
+    git diff
+    ```
+
+2. **커밋 + 양쪽 원격 push**
+
+    ```bash
+    git add .
+    git commit -m "작업 내용"
+    git push github main
+    git push usb main        # USB 꽂혀 있을 때만
+    ```
+
+3. **(선택) 동기화 확인** — 불안할 때 세 군데 커밋 해시 일치 여부 확인
+
+    ```bash
+    git rev-parse HEAD
+    git ls-remote github refs/heads/main
+    git ls-remote usb    refs/heads/main
+    # 셋 다 같은 해시면 완전 동기화됨
+    ```
+
+#### C. 자주 만나는 상황
+
+| 상황 | 의미 | 대처 |
+| --- | --- | --- |
+| `Your branch is behind 'github/main' by N commits` | 원격이 N 커밋 앞서 있음 | A-1 ~ A-4 순서 진행 |
+| `Your branch is ahead of 'github/main' by N commits` | 로컬만 앞서 있음 (push 누락) | `git push github main` |
+| `LF will be replaced by CRLF` 경고 | Windows 줄바꿈 변환 안내 (에러 아님) | 무시해도 됨, 파일 내용 유지 |
+| push 거부 (`rejected`, `non-fast-forward`) | 원격이 앞서있는데 push 시도 | `git pull --rebase github main` 후 다시 push |
+| pull 충돌 (`CONFLICT`) | 양쪽에서 같은 부분 수정 | 파일에서 `<<<<<<<` 마커 해결 → `git add` → `git rebase --continue` |
+
+#### D. 피해야 할 패턴
+
+- ❌ **pull 없이 바로 작업 시작** → 나중에 push 거부되고 머지 지옥
+- ❌ **커밋 없이 pull** → 로컬 변경을 원격이 덮어쓸 수 있음 (commit 또는 stash 먼저)
+- ❌ **한쪽 원격만 push** (예: github만, usb 빠뜨림) → 다음 PC에서 USB 환경으로 작업하면 구버전 base로 시작
+- ❌ **여러 날 커밋 안 쌓기** → 한 커밋 diff가 커지면 충돌 해결 어려움. 기능 단위로 자주 커밋
+
 ---
 
 ## 4. 자주 쓰는 명령어 모음

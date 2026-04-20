@@ -725,6 +725,21 @@ class LiveTrader(LiveEngineBase):
                 f"청산가={pos.liquidation_price:,.2f}"
             )
 
+    # ------------------------------------------------------------------
+    # 차트 데이터 제공 (LiveEngineBase._render_chart 훅)
+    # ------------------------------------------------------------------
+
+    def _get_position_spans(self) -> list:
+        from src.visualize.chart import trade_records_to_position_spans
+        return trade_records_to_position_spans(list(self.trade_records))
+
+    def _get_equity_df(self):
+        return None  # 트레이더는 equity curve 미보유 (asset_history 스냅샷은 DB에만)
+
+    def _get_chart_output_dir(self) -> str:
+        safe_symbol = self.symbol.replace("/", "_")
+        return str(Path("data/trader") / safe_symbol / "charts")
+
     def _save_trades_csv(self):
         if not self.trade_records:
             return

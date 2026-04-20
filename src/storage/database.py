@@ -11,6 +11,14 @@ logger = setup_logger("hantrader.storage")
 class DatabaseStorage:
     """SQLite 기반 OHLCV 데이터 저장소."""
 
+    # 매매 기록 mode → 테이블 이름 매핑
+    # trader: 실거래, backtest: 백테스트, simulator: 페이퍼 트레이딩
+    TRADE_TABLES = {
+        "trader": "trades",
+        "backtest": "backtest_trades",
+        "simulator": "simulator_trades",
+    }
+
     def __init__(self, db_path: str = "data/db/hantrader.db"):
         path = Path(db_path)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -18,7 +26,40 @@ class DatabaseStorage:
         self._init_tables()
         logger.info(f"DB 초기화: {db_path}")
 
+    def _resolve_trade_table(self, mode: str) -> str:
+        """mode → 테이블 이름. 알 수 없는 값이면 ValueError."""
+        tbl = self.TRADE_TABLES.get(mode)
+        if tbl is None:
+            raise ValueError(
+                f"알 수 없는 mode='{mode}'. "
+                f"{list(self.TRADE_TABLES.keys())} 중 하나여야 함"
+            )
+        return tbl
+
     def _init_tables(self):
+        trade_schema = """
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            exchange TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            timeframe TEXT NOT NULL,
+            datetime TEXT NOT NULL,
+            side TEXT NOT NULL,
+            action TEXT NOT NULL,
+            price REAL NOT NULL,
+            quantity REAL NOT NULL,
+            amount REAL NOT NULL,
+            fee REAL DEFAULT 0,
+            funding_fee REAL DEFAULT 0,
+            leverage INTEGER DEFAULT 1,
+            margin REAL DEFAULT 0,
+            pnl REAL DEFAULT 0,
+            pnl_pct REAL DEFAULT 0,
+            unrealized_pnl REAL DEFAULT 0,
+            unrealized_pnl_pct REAL DEFAULT 0,
+            order_id TEXT,
+            reason TEXT,
+            entry_step INTEGER DEFAULT 1
+        """
         with self.engine.connect() as conn:
             conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS ohlcv (
@@ -34,31 +75,11 @@ class DatabaseStorage:
                     PRIMARY KEY (exchange, symbol, timeframe, datetime)
                 )
             """))
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS trades (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    exchange TEXT NOT NULL,
-                    symbol TEXT NOT NULL,
-                    timeframe TEXT NOT NULL,
-                    datetime TEXT NOT NULL,
-                    side TEXT NOT NULL,
-                    action TEXT NOT NULL,
-                    price REAL NOT NULL,
-                    quantity REAL NOT NULL,
-                    amount REAL NOT NULL,
-                    fee REAL DEFAULT 0,
-                    funding_fee REAL DEFAULT 0,
-                    leverage INTEGER DEFAULT 1,
-                    margin REAL DEFAULT 0,
-                    pnl REAL DEFAULT 0,
-                    pnl_pct REAL DEFAULT 0,
-                    unrealized_pnl REAL DEFAULT 0,
-                    unrealized_pnl_pct REAL DEFAULT 0,
-                    order_id TEXT,
-                    reason TEXT,
-                    entry_step INTEGER DEFAULT 1
-                )
-            """))
+            # trades(trader) / backtest_trades / simulator_trades — 동일 스키마
+            for tbl in self.TRADE_TABLES.values():
+                conn.execute(text(
+                    f"CREATE TABLE IF NOT EXISTS {tbl} ({trade_schema})"
+                ))
             conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS asset_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -176,12 +197,18 @@ class DatabaseStorage:
         order_id: str = "",
         reason: str = "",
         entry_step: int = 1,
+        mode: str = "trader",
     ) -> int:
-        """매매 기록을 DB에 저장한다. 삽입된 row ID를 반환."""
+        """매매 기록을 DB에 저장한다. 삽입된 row ID를 반환.
+
+        mode: "trader" → trades, "backtest" → backtest_trades,
+              "simulator" → simulator_trades
+        """
+        table = self._resolve_trade_table(mode)
         with self.engine.connect() as conn:
             result = conn.execute(
-                text("""
-                    INSERT INTO trades
+                text(f"""
+                    INSERT INTO {table}
                     (exchange, symbol, timeframe, datetime, side, action,
                      price, quantity, amount, fee, funding_fee,
                      leverage, margin, pnl, pnl_pct,
@@ -214,10 +241,20 @@ class DatabaseStorage:
         symbol: str,
         start: str | None = None,
         end: str | None = None,
+        mode: str = "trader",
+        timeframe: str | None = None,
     ) -> pd.DataFrame:
-        """매매 기록을 DB에서 로드한다."""
-        query = "SELECT * FROM trades WHERE exchange = :exchange AND symbol = :symbol"
+        """매매 기록을 DB에서 로드한다.
+
+        mode: "trader" / "backtest" / "simulator"
+        timeframe: 지정 시 해당 TF만 로드 (백테스트/시뮬 재실행 시 유용)
+        """
+        table = self._resolve_trade_table(mode)
+        query = f"SELECT * FROM {table} WHERE exchange = :exchange AND symbol = :symbol"
         params: dict = {"exchange": exchange, "symbol": symbol}
+        if timeframe:
+            query += " AND timeframe = :timeframe"
+            params["timeframe"] = timeframe
         if start:
             query += " AND datetime >= :start"
             params["start"] = start
@@ -226,6 +263,33 @@ class DatabaseStorage:
             params["end"] = end
         query += " ORDER BY datetime, id"
         return pd.read_sql(text(query), self.engine, params=params)
+
+    def clear_trades(
+        self,
+        exchange: str,
+        symbol: str,
+        mode: str,
+        timeframe: str | None = None,
+    ) -> int:
+        """mode 테이블에서 특정 exchange/symbol(/timeframe) 매매기록을 삭제한다.
+
+        백테스트 재실행 시 이전 결과를 정리하는 용도.
+        실거래(trader) 테이블은 데이터 보호를 위해 삭제하지 않는다.
+        """
+        if mode == "trader":
+            raise ValueError(
+                "trader(실거래) 테이블은 clear_trades로 삭제할 수 없습니다."
+            )
+        table = self._resolve_trade_table(mode)
+        query = f"DELETE FROM {table} WHERE exchange = :exchange AND symbol = :symbol"
+        params: dict = {"exchange": exchange, "symbol": symbol}
+        if timeframe:
+            query += " AND timeframe = :timeframe"
+            params["timeframe"] = timeframe
+        with self.engine.connect() as conn:
+            result = conn.execute(text(query), params)
+            conn.commit()
+            return result.rowcount
 
     # ------------------------------------------------------------------
     # 자산 이력 (asset_history)
