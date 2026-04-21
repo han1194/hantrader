@@ -1254,3 +1254,45 @@ A:
 
   # 수집 건너뛰기 (인터넷 끊김, 결과 재현 등)
   python -m src.main backtest -e binance_futures -s btc --no-auto-collect
+
+
+==================================================================
+
+2026-04-20
+
+Q1. 백테스트/시뮬 에서도 차트의 매매 표시를 확인가능하도록 수정해줘
+ - db저장은 실거래가 아니라서 필요없지만, 필요하다면 백테스트/시뮬레이터/트레이드 
+ 3개 테이블을 만들어서 저장하는 식으로 잘 구현해줘
+
+A:
+구현 내용
+DB 3개 테이블 분리
+
+database.py — TRADE_TABLES = {"trader": "trades", "backtest": "backtest_trades", 
+    "simulator": "simulator_trades"} 도입.
+    save_trade(mode=...), load_trades(mode=..., timeframe=...), clear_trades(...) 제공. 
+    실거래 테이블은 clear_trades에서 보호.
+
+백테스트 저장
+
+engine.py — BacktestEngine(db=, save_mode=, timeframe=) 인자 추가. 
+_open_or_add → entry/add, _close_position → exit/stop_loss (사유 기반 판별), 
+_handle_stop_loss 부분 손절까지 DB 기록. 
+main.py cmd_backtest에서 실행 전 clear_trades(mode="backtest", timeframe=...)로 이전 결과 제거.
+
+시뮬레이터 저장
+
+live_simulator.py 내부 엔진에 save_mode="simulator" 전달 — 세션간 누적.
+
+chart CLI 확장
+
+  --mode {trader,backtest,simulator} (기본 trader). 
+  출력 경로 data/charts/{mode}/{SYMBOL}/. 매매 기록 없으면 WARNING 후 OHLCV만 표시.
+
+검증
+
+ - 백테스트 실행 → backtest_trades 104행 저장, 38 포지션
+ - chart --mode backtest → 시그널 104건 + 음영 39개 렌더링 확인
+ - chart --mode trader (빈 테이블) → 경고 후 OHLCV 정상 표시
+
+문서(CLAUDE.md, CHANGELOG.md, howtorun.md) 모두 업데이트 완료.
