@@ -74,10 +74,12 @@ storage:
     output_dir: "data/csv"
 
 # ─── BB 전략 설정 ───
-# name: "bb", "bb_mtf", "bb_v2", "bb_v2_mtf"
+# name: "bb", "bb_mtf", "bb_v2", "bb_v2_mtf", "bb_v3", "bb_v4"
 # bb_v2/bb_v2_mtf: BBW 최소 기준 + 물타기 간격 제한 추가
+# bb_v3: V2 + BB% 극단 돌파 필터(A) + ADX OR 차단(B)
+# bb_v4: V2 + 국면 전환(trend→sideways) 쿨다운(C)
 strategy:
-  name: "bb_v2"                      # "bb" / "bb_mtf" / "bb_v2" / "bb_v2_mtf"
+  name: "bb_v2"                      # "bb" / "bb_mtf" / "bb_v2" / "bb_v2_mtf" / "bb_v3" / "bb_v4"
   # Bollinger Bands 기본
   bb_period: 20
   bb_std: 2.0
@@ -104,9 +106,17 @@ strategy:
   mtf_weight_upper: 1.0       # 상위 TF 가중치
   mtf_weight_lower: 0.5       # 하위 TF 가중치
   mtf_trend_threshold: 2.5    # 추세 판정 임계값 (기준TF=2 + 상위=1 + 하위=0.5, 최대 3.5)
-  # ─── bb_v2 전용 파라미터 ───
+  # ─── bb_v2 전용 파라미터 (bb_v3/bb_v4도 V2 상속이라 사용) ───
   min_bbw_for_sideways: 1.0     # 횡보 반전매매 최소 BBW (밴드가 이보다 좁으면 진입 차단)
   min_entry_interval: 3         # 추세 물타기 최소 간격 (캔들 수, 기존: 1)
+  # ─── bb_v3 전용 파라미터 ───
+  # BB% 극단 돌파 필터 (신규진입 한정). 밴드 돌파는 추세 시작 신호로 간주하여 역추세 진입 차단.
+  bbp_breakout_upper: 1.05      # BB% 상단 돌파 기준 (이 값 초과면 횡보 short 신규진입 차단)
+  bbp_breakout_lower: -0.05     # BB% 하단 돌파 기준 (이 값 미만이면 횡보 long 신규진입 차단)
+  # (참고) bb_v3는 adx_entry_block을 OR 조건으로 사용 (adx_rising 무관)
+  # ─── bb_v4 전용 파라미터 ───
+  # 국면 전환 쿨다운 — trend→sideways 전환 직후 N캔들 횡보 신규진입 차단
+  cooldown_candles: 5           # 전환 후 차단 캔들 수
 
 # ─── 백테스트 설정 ───
 backtest:

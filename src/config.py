@@ -70,6 +70,15 @@ class StrategyConfig:
     min_bbw_for_sideways: float = 1.0   # 횡보 반전매매 최소 BBW
     min_entry_interval: int = 3         # 추세 물타기 최소 간격 (캔들 수)
 
+    # V3 전략 파라미터 (name="bb_v3")
+    # BB% 극단 돌파 필터 (신규진입 한정) — 돌파는 추세 시작 신호로 간주하여 역추세 진입 차단
+    bbp_breakout_upper: float = 1.05    # BB% 상단 돌파 기준
+    bbp_breakout_lower: float = -0.05   # BB% 하단 돌파 기준
+
+    # V4 전략 파라미터 (name="bb_v4")
+    # 국면 전환 쿨다운 — trend→sideways 전환 직후 N캔들 횡보 신규진입 차단
+    cooldown_candles: int = 5
+
     def to_strategy_kwargs(
         self,
         *,
@@ -110,10 +119,19 @@ class StrategyConfig:
             kwargs["mtf_weight_lower"] = self.mtf_weight_lower
             kwargs["mtf_trend_threshold"] = self.mtf_trend_threshold
 
-        # V2 전략 파라미터 (bb_v2, bb_v2_mtf)
-        if self.name in ("bb_v2", "bb_v2_mtf"):
+        # V2 전략 파라미터 (bb_v2, bb_v2_mtf, bb_v3, bb_v4는 V2 상속)
+        if self.name in ("bb_v2", "bb_v2_mtf", "bb_v3", "bb_v4"):
             kwargs["min_bbw_for_sideways"] = self.min_bbw_for_sideways
             kwargs["min_entry_interval"] = self.min_entry_interval
+
+        # V3 전용 파라미터 (BB% 돌파 필터)
+        if self.name == "bb_v3":
+            kwargs["bbp_breakout_upper"] = self.bbp_breakout_upper
+            kwargs["bbp_breakout_lower"] = self.bbp_breakout_lower
+
+        # V4 전용 파라미터 (국면 전환 쿨다운)
+        if self.name == "bb_v4":
+            kwargs["cooldown_candles"] = self.cooldown_candles
 
         return kwargs
 
@@ -313,6 +331,11 @@ class AppConfig:
             mtf_weight_upper=strat_raw.get("mtf_weight_upper", 1.0),
             mtf_weight_lower=strat_raw.get("mtf_weight_lower", 0.5),
             mtf_trend_threshold=strat_raw.get("mtf_trend_threshold", 2.5),
+            min_bbw_for_sideways=strat_raw.get("min_bbw_for_sideways", 1.0),
+            min_entry_interval=strat_raw.get("min_entry_interval", 3),
+            bbp_breakout_upper=strat_raw.get("bbp_breakout_upper", 1.05),
+            bbp_breakout_lower=strat_raw.get("bbp_breakout_lower", -0.05),
+            cooldown_candles=strat_raw.get("cooldown_candles", 5),
         )
 
         # simple sections

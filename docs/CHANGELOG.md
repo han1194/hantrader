@@ -1,5 +1,38 @@
 # HanTrader 변경 이력
 
+## 2026-04-21 BB V3 / BB V4 전략 추가 (국면 오판 진입 방지)
+
+`bb_v2` 백테스트 리포트에서 상승추세 중 횡보 short 진입(04-13 23:00) 및 하락추세 중 횡보 long 진입(04-18~04-20)이 확인됨.
+공통 원인: 추세 전환 구간에서 `detect_regime()`이 direction 합의 미달로 sideways를 내보내며, BB% 극단값이 반전 신호로 오해됨.
+기존 전략은 그대로 유지하고, 문제에 대응하는 2개 전략을 추가한다.
+
+### 신규 전략
+
+- **BB V3 (`bb_v3`)** — BBV2Strategy 상속, `_sideways_signals_v2` 오버라이드
+  - **(A) BB% 극단 돌파 필터**: 횡보 신규진입 시 `bb_pct > bbp_breakout_upper`(기본 1.05) 또는 `bb_pct < bbp_breakout_lower`(기본 -0.05)면 진입 차단. 밴드 돌파는 추세 시작 신호로 간주.
+  - **(B) ADX OR 차단**: `adx >= adx_entry_block`만 만족해도 신규진입 차단 (`adx_rising` 조건 제거, OR로 완화).
+  - 두 필터는 **신규진입에만** 적용. 기존 포지션의 물타기/청산/손절은 부모 V2 로직 그대로.
+
+- **BB V4 (`bb_v4`)** — BBV2Strategy 상속, `generate_signals` 오버라이드
+  - **(C) 국면 전환 쿨다운**: 직전 캔들이 trend였다가 현재 캔들이 sideways로 전환되면, 이후 `cooldown_candles`(기본 5) 캔들 동안 횡보 **신규진입** 차단.
+  - 기존 포지션의 물타기/청산은 영향 없음.
+
+### 검증 (BTC/USDT 1h, 최근 500캔들)
+
+- 케이스 1 (04-13 23:00 BB%=1.35, ADX=29.4 상승 돌파 구간에서 V2가 short 진입): V3/V4 모두 차단
+- 케이스 2 (04-18~04-20 하락 구간 long 물타기): V3가 1캔들 지연 효과, 완전 차단은 기존 포지션 물타기 성격상 제한적
+
+### 수정/추가 파일
+
+- `src/strategy/bb_v3_strategy.py` — 신규
+- `src/strategy/bb_v4_strategy.py` — 신규
+- `src/strategy/__init__.py` — BBV3Strategy, BBV4Strategy export
+- `src/config.py` — `StrategyConfig`에 `bbp_breakout_upper/lower`, `cooldown_candles` 필드 추가, `to_strategy_kwargs` 분기 추가, `from_yaml`에 v2/v3/v4 파라미터 명시 전달
+- `config/config.yaml` — v3/v4 파라미터 섹션 및 `strategy.name` 선택지 업데이트
+- `CLAUDE.md` — 전략 설명 추가
+
+---
+
 ## 2026-04-20 매매 기록 DB 분리 저장 (3개 테이블) + chart CLI 모드별 조회
 
 차트에서 백테스트/시뮬/실거래의 매매 기록을 모두 재조회할 수 있도록 DB 저장 구조를 확장.

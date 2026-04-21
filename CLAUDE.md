@@ -26,7 +26,7 @@ hantrader/
 │   ├── core/             # 공통 엔진 (LiveEngineBase: 시뮬레이터/트레이더 베이스 클래스)
 │   ├── exchange/         # ccxt 거래소 래퍼 (공개 API + 인증 거래 API, 팩토리 패턴)
 │   ├── collector/        # 데이터 수집기 (이어서 수집 지원)
-│   ├── strategy/         # 트레이딩 전략 (BB, BB MTF, BB V2, BB V2 MTF)
+│   ├── strategy/         # 트레이딩 전략 (BB, BB MTF, BB V2, BB V2 MTF, BB V3, BB V4)
 │   ├── backtest/         # 백테스트 엔진, 평가, 리포트
 │   ├── simulator/        # 라이브 시뮬레이터 (LiveEngineBase 상속, 페이퍼 트레이딩)
 │   ├── trader/           # 실거래 트레이더 (LiveEngineBase 상속, Binance Futures 실주문)
@@ -85,10 +85,12 @@ hantrader/
 - 중간 동기화: `sync_timeframe` (기본 15m) 캔들마다 거래소와 포지션/잔고 동기화 — liquidation, 외부 청산 등 메인 TF 사이 변화 감지
 - 시작/종료 시에도 거래소 동기화 수행 (잔고, 포지션, 펀딩 수수료)
 - Emergency stop: 진입/추매마다 거래소에 STOP_MARKET 주문 등록 (서버사이드 비상 손절, 마진 콜 방지)
-- 전략은 레지스트리 기반 (`create_strategy(name, **kwargs)`) — config.yaml `strategy.name`으로 선택 ("bb", "bb_mtf", "bb_v2", "bb_v2_mtf")
+- 전략은 레지스트리 기반 (`create_strategy(name, **kwargs)`) — config.yaml `strategy.name`으로 선택 ("bb", "bb_mtf", "bb_v2", "bb_v2_mtf", "bb_v3", "bb_v4")
 - BB MTF 전략: 기준 TF 위/아래 인접 TF 국면을 가중 투표로 합산, 허위 국면 전환 필터링 (예: 1h → 30m/2h 참고)
 - BB V2 전략: BBW 최소 기준(`min_bbw_for_sideways`) + 추세 물타기 최소 간격(`min_entry_interval`) 추가, 기존 BB 전략 상속
 - BB V2 MTF 전략: BB V2 + MTF 국면 판단 결합
+- BB V3 전략: BB V2 상속 + 횡보 **신규진입**에 2가지 필터 추가 — (A) BB% 극단 돌파 필터(`bbp_breakout_upper/lower`, 기본 1.05/-0.05), (B) ADX OR 차단(`adx >= adx_entry_block`이면 rising 무관 차단). 기존 포지션 물타기/청산은 변경 없음
+- BB V4 전략: BB V2 상속 + 국면 전환(trend→sideways) 쿨다운(`cooldown_candles`, 기본 5) — 전환 직후 N캔들 동안 횡보 **신규진입**만 차단 (물타기/청산 영향 없음)
 - 매매 기록 DB 저장: 모드별로 3개 테이블에 분리 저장 — 실거래=`trades`, 백테스트=`backtest_trades`, 시뮬레이터=`simulator_trades` (모두 동일 스키마)
 - `DatabaseStorage.TRADE_TABLES` dict로 모드→테이블 매핑, `save_trade(..., mode=...)` / `load_trades(..., mode=...)` / `clear_trades(exchange, symbol, mode, timeframe=...)` 제공
 - `BacktestEngine`은 `db`/`save_mode`/`timeframe` 인자로 DB 저장 활성화 (main.py가 `db`, `save_mode="backtest"` 주입, 실행 전 이전 결과 `clear_trades`)
@@ -108,6 +110,8 @@ hantrader/
 - [x] BB 전략 (횡보 반전매매 3단계 물타기 + 횡보장 레버리지 제한 + 추세추종, ADX 다중지표 국면판단)
 - [x] BB MTF 전략 (다중 타임프레임 국면 판단 — 기준 TF 위/아래 TF 국면 참고로 허위 전환 필터링)
 - [x] BB V2 / BB V2 MTF 전략 (BBW 최소 기준 + 물타기 간격 제한, bb_v2/bb_v2_mtf)
+- [x] BB V3 전략 (bb_v3) — V2 + BB% 극단 돌파 필터(A) + ADX OR 차단(B), 밴드 돌파/고ADX 구간 역추세 진입 방지
+- [x] BB V4 전략 (bb_v4) — V2 + 국면 전환(trend→sideways) 쿨다운(C), 전환 애매 구간 신규진입 차단
 - [~] 업비트 거래소 지원 (`src/exchange/upbit.py` — 2026-04-17 병합 시점에 파일만 포팅됨, 팩토리/심볼정규화/인증 코드 통합 필요)
 - [x] 백테스트 엔진 (시뮬레이션, 평가 지표, 텍스트/HTML 리포트, 국면별/방향별 분석 통계)
 - [x] 백테스트 자동 수집 (실행 전 DB 마지막 시점 → 최신까지 이어서 수집 + CSV 출력, `--no-auto-collect`로 비활성화)
