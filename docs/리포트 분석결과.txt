@@ -275,3 +275,141 @@ A:
 
 사용: config/config.yaml의 strategy.name을 "bb_v3" 또는 "bb_v4"로 변경 후 
       python -m src.main backtest -e binance_futures -s btc -t 1h로 비교 백테스트 가능.
+
+----------------------------------------------------------------------------------
+
+Q3. 2026-04-18 19:00은 차트보면 하락추세장에서 하락추세가 멈출듯 말듯 하는 정도인데 왜 횡보로 판단하는지?
+
+A:
+실제 값을 뽑아보니 원인이 명확히 드러납니다.
+
+04-18 19:00 지표 값
+시각	   ADX	  BBW 변화율	  strength	  direction	  국면
+17:00	  26.98	  -0.69	      2.0	        -1.5	      sideways
+18:00	  25.48	  -0.64	      2.0	        -1.5	      sideways
+19:00	  24.71	  -0.58	      1.0	        -1.5	      sideways
+20:00	  24.78	  -0.51	      1.0	        -1.5	      sideways
+
+왜 sideways로 판정됐나
+
+detect_regime() 규칙:
+
+ - strength >= 2.0 AND direction <= -2.0 이면 TREND_DOWN
+
+17~18:00: strength=2.0 ✓ / direction=-1.5 ✗ → 방향 합의 미달로 sideways
+19:00: strength=1.0 ✗ / direction=-1.5 → 추세 강도 자체가 미달
+
+구체적으로:
+
+ 1. ADX가 25 경계값 아래로 내려옴 (24.71) → strength +2.0 → +1.0으로 하락
+ 2. BBW 축소 중 (rolling 평균 대비 -58%) → bbw_strength=0
+ 3. direction도 -2.0에 못 미침 → close가 SMA 위 or DI 간격 미미 (하락 중 일시 되돌림)
+
+본질적 한계
+
+사용자가 정확히 표현하신 "하락이 멈출듯 말듯" 구간의 특징:
+
+하락 속도 둔화 → ADX 하락
+되돌림으로 일시 반등 → EMA/SMA/MACD가 혼조
+밴드 축소 → BBW 확대 신호 없음
+
+이 전략의 detect_regime은 추세의 일시 정지를 추세 종료로 오판하는 구조적 약점이 있습니다. 
+지표가 모두 지연(후행)이라 "쉬어가기" vs "반전"을 구분 못 함.
+
+개선 방향 (3가지)
+
+A. Regime Hysteresis (관성)
+
+ - 현재: 1캔들만 조건 만족해도 전환
+ - 개선: trend → sideways 전환은 N캔들 연속 조건 만족 요구
+ - 효과: 직전 국면이 trend_down이면, sideways 조건이 23캔들 연속돼야 전환 → 1719:00 구간 trend_down 유지
+
+B. ADX 경계값 완화
+
+ - strength += (adx >= 25) * 2.0 → (adx >= 22) * 2.0으로 낮추거나
+ - adx >= 25 그대로 두고 (adx >= 20) * 1.5로 중추세 가중 상향
+ - 효과: 19:00 ADX=24.7도 strength=2.0 확보
+
+C. 가격 기반 추세 보강
+
+ - 현재 direction은 모두 지연 지표(EMA/MACD/DI) → 되돌림에 취약
+ - 최근 N캔들 가격 낙폭/상승폭(예: 20캔들 최고·최저 대비 위치)을 direction에 추가
+ - 04-18 19:00은 가격이 여전히 최근 고점 대비 한참 아래 → -1 추가 → direction -2.5로 trend_down 유지
+
+권장
+A (hysteresis) 가 가장 효과적이고 부작용 적습니다. 
+"하락이 멈출듯 말듯"이 정확히 hysteresis로 잡히는 현상이며, 
+5캔들 연속 조건으로 하면 BB V4의 쿨다운과도 자연스럽게 결합됩니다.
+
+A를 BB V5(가칭) 로 추가할까요? 아니면 현재 BB V4의 detect_regime에 직접 적용(V4 수정)하시겠습니까?
+
+=> A를 BB V5로 추가
+
+----------------------------------------------------------------------------------
+
+Q4. 2횡보, 추세 국면 판단에 bb width 크기와 상단, 중단, 하단의 기울기값을 참고하는 지표는 없는지? 
+예를 들어 상단 돌파하고 상단 기울기가양으로 커지고, 중단이 양으로 커지면 추세상승. 
+bb width 크기가 작아지고, 상단, 중단은 양으로 큰데, 하단이 음에서 양으로커지면 추세하락 등
+
+A:
+좋은 아이디어입니다. 정리해드리겠습니다.
+
+기존 지표 (이 발상과 관련된 것들)
+
+  1. BB Bandwidth (BBW) — 이미 사용 중. 밴드 폭 자체만 측정.
+  2. %B (bb_pct) — 이미 사용 중. 가격 위치만.
+  3. Bollinger Band Squeeze (John Bollinger, 1987)
+    - BBW가 최근 N캔들 최소값일 때 "squeeze" 감지 → 돌파 임박 신호
+    - 방향은 별도 지표(모멘텀)로 판단
+  4. TTM Squeeze (John Carter)
+    - BB가 Keltner Channel 안으로 들어가면 squeeze ON → 나오면 방향성 돌파
+    - 방향은 모멘텀 오실레이터로 보강
+  5. Bollinger Band Walking (Bollinger 본인 용어)
+    - 가격이 상단(또는 하단)에 3캔들 이상 달라붙으면 강한 추세
+    - 우리 전략의 BB% >= 0.8 조건이 유사한 스냅샷 버전
+
+상/중/하단 기울기를 합쳐 regime을 판단하는 "표준 지표"는 없습니다. 
+커스텀 조합이 필요한 영역이고, TradingView에 Pinescript로 구현된 것들이 일부 있는 정도.
+
+현재 전략에 추가 가능한 slope 기반 시그널
+
+현재 detect_regime()의 direction 점수에 다음을 추가 가능:
+
+지표	                계산	                            의미
+middle band slope	  (sma[i] - sma[i-N]) / sma[i-N]	  현재 SMA 추세 (후행이지만 안정적)
+upper band slope	  상단 변화율	                        양→변동성 확대 중인 상승 / 음→축소
+lower band slope	  하단 변화율	                        양→하락 변동성 축소 / 음→하락 변동성 확대
+slope 합의	         세 slope 부호	                    3개 모두 + → 강한 상승 / 3개 모두 - → 강한 하락
+
+예시 규칙:
+
+ - 세 밴드 모두 양 기울기 & BBW 확대: 강한 추세 상승 (direction +2~3)
+ - 세 밴드 모두 음 기울기 & BBW 확대: 강한 추세 하락 (direction -2~3)
+ - 상단 음 / 하단 양 (수렴) & BBW 축소: squeeze, 관망
+ - 상단 양 / 하단 음 (발산) & BBW 확대: 변동성 폭발, 방향은 price vs middle로 확정
+
+사용자가 제시한 두 규칙 검토
+
+규칙 1 (상단 돌파 + 상단↑ + 중단↑ → 추세상승): 정확합니다. BB Walking + band alignment의 고전 패턴. 
+우리 전략에도 즉시 적용 가치 있음.
+
+규칙 2 (BBW 축소 + 상단↑ + 중단↑ + 하단 -→+ → 추세하락): 이건 추세하락보다는 추세 종료/수렴(squeeze) 
+에 더 가깝습니다.
+
+ - BBW 축소 + 하단 상승 전환 = 변동성 수축 = 박스권 진입 신호가 일반적
+ - 추세하락은 보통 세 밴드 모두 음 기울기 + BBW 확대로 나타남
+ - "상단/중단은 아직 양의 관성(지연)이지만 하단이 먼저 +로 돌아서는" 특수 케이스로 해석한다면
+    — 추세 피크(상승 종료) 신호로 보는 게 정확할 것.
+
+제안
+BB V6 (가칭) — 밴드 기울기 기반 direction 보강:
+
+ - compute_indicators에 bb_upper_slope, bb_middle_slope, bb_lower_slope 추가 (N=3~5캔들 변화율)
+ - detect_regime()의 direction 계산에:
+    - 세 밴드 모두 +: direction +2
+    - 세 밴드 모두 -: direction -2
+ - 혼조(상단↑/하단↑ 수렴 or 상단↓/하단↓ 수렴): BBW 축소 → squeeze 상태 표시
+ - squeeze 상태는 신규진입 차단 (V3의 BB% 돌파 필터와 유사 동작)
+
+이 방향으로 V6를 추가할까요? 밴드 slope를 direction에 명시적으로 반영하면 
+현재 MACD/DI의 후행성 문제를 상당 부분 보완할 수 있습니다.

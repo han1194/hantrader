@@ -79,6 +79,18 @@ class StrategyConfig:
     # 국면 전환 쿨다운 — trend→sideways 전환 직후 N캔들 횡보 신규진입 차단
     cooldown_candles: int = 5
 
+    # V5 전략 파라미터 (name="bb_v5")
+    # Regime hysteresis — trend → sideways 전환은 N캔들 연속 sideways 조건 만족 시에만 허용
+    hysteresis_candles: int = 3
+
+    # V6 전략 파라미터 (name="bb_v6")
+    # 밴드 기울기(slope) 정렬 + Squeeze 감지
+    slope_lookback: int = 3              # 밴드 N캔들 변화율 계산 구간
+    slope_threshold: float = 0.001       # 유의미한 slope 최소값 (0.1%)
+    slope_weight: float = 0.5            # 각 밴드 부호 * 이 값 → direction에 가산
+    squeeze_bbw_ratio: float = 0.7       # BBW < rolling mean * 이 값 → squeeze
+    block_entry_on_squeeze: bool = True  # squeeze 상태를 강제 sideways로 취급
+
     def to_strategy_kwargs(
         self,
         *,
@@ -119,8 +131,8 @@ class StrategyConfig:
             kwargs["mtf_weight_lower"] = self.mtf_weight_lower
             kwargs["mtf_trend_threshold"] = self.mtf_trend_threshold
 
-        # V2 전략 파라미터 (bb_v2, bb_v2_mtf, bb_v3, bb_v4는 V2 상속)
-        if self.name in ("bb_v2", "bb_v2_mtf", "bb_v3", "bb_v4"):
+        # V2 전략 파라미터 (bb_v2, bb_v2_mtf, bb_v3~v6는 V2 상속)
+        if self.name in ("bb_v2", "bb_v2_mtf", "bb_v3", "bb_v4", "bb_v5", "bb_v6"):
             kwargs["min_bbw_for_sideways"] = self.min_bbw_for_sideways
             kwargs["min_entry_interval"] = self.min_entry_interval
 
@@ -132,6 +144,18 @@ class StrategyConfig:
         # V4 전용 파라미터 (국면 전환 쿨다운)
         if self.name == "bb_v4":
             kwargs["cooldown_candles"] = self.cooldown_candles
+
+        # V5 전용 파라미터 (Regime hysteresis)
+        if self.name == "bb_v5":
+            kwargs["hysteresis_candles"] = self.hysteresis_candles
+
+        # V6 전용 파라미터 (밴드 slope + squeeze)
+        if self.name == "bb_v6":
+            kwargs["slope_lookback"] = self.slope_lookback
+            kwargs["slope_threshold"] = self.slope_threshold
+            kwargs["slope_weight"] = self.slope_weight
+            kwargs["squeeze_bbw_ratio"] = self.squeeze_bbw_ratio
+            kwargs["block_entry_on_squeeze"] = self.block_entry_on_squeeze
 
         return kwargs
 
@@ -336,6 +360,12 @@ class AppConfig:
             bbp_breakout_upper=strat_raw.get("bbp_breakout_upper", 1.05),
             bbp_breakout_lower=strat_raw.get("bbp_breakout_lower", -0.05),
             cooldown_candles=strat_raw.get("cooldown_candles", 5),
+            hysteresis_candles=strat_raw.get("hysteresis_candles", 3),
+            slope_lookback=strat_raw.get("slope_lookback", 3),
+            slope_threshold=strat_raw.get("slope_threshold", 0.001),
+            slope_weight=strat_raw.get("slope_weight", 0.5),
+            squeeze_bbw_ratio=strat_raw.get("squeeze_bbw_ratio", 0.7),
+            block_entry_on_squeeze=strat_raw.get("block_entry_on_squeeze", True),
         )
 
         # simple sections

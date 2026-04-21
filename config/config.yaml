@@ -74,12 +74,14 @@ storage:
     output_dir: "data/csv"
 
 # ─── BB 전략 설정 ───
-# name: "bb", "bb_mtf", "bb_v2", "bb_v2_mtf", "bb_v3", "bb_v4"
+# name: "bb", "bb_mtf", "bb_v2", "bb_v2_mtf", "bb_v3", "bb_v4", "bb_v5", "bb_v6"
 # bb_v2/bb_v2_mtf: BBW 최소 기준 + 물타기 간격 제한 추가
 # bb_v3: V2 + BB% 극단 돌파 필터(A) + ADX OR 차단(B)
 # bb_v4: V2 + 국면 전환(trend→sideways) 쿨다운(C)
+# bb_v5: V2 + 국면 판단 hysteresis (trend→sideways 전환 시 N캔들 연속 조건 요구)
+# bb_v6: V2 + 밴드 기울기(상/중/하단 slope) 정렬 direction 보강 + Squeeze 감지 시 sideways 강제
 strategy:
-  name: "bb_v2"                      # "bb" / "bb_mtf" / "bb_v2" / "bb_v2_mtf" / "bb_v3" / "bb_v4"
+  name: "bb_v4"                      # "bb" / "bb_mtf" / "bb_v2" / "bb_v2_mtf" / "bb_v3" / "bb_v4" / "bb_v5" / "bb_v6"
   # Bollinger Bands 기본
   bb_period: 20
   bb_std: 2.0
@@ -117,6 +119,18 @@ strategy:
   # ─── bb_v4 전용 파라미터 ───
   # 국면 전환 쿨다운 — trend→sideways 전환 직후 N캔들 횡보 신규진입 차단
   cooldown_candles: 5           # 전환 후 차단 캔들 수
+  # ─── bb_v5 전용 파라미터 ───
+  # Regime hysteresis — trend→sideways 전환을 N캔들 연속 조건 만족 시에만 허용 (trend 관성 유지).
+  # sideways→trend 전환은 즉시 허용, trend_up↔trend_down 반전도 즉시.
+  hysteresis_candles: 3         # trend→sideways 전환 요구 연속 캔들 수
+  # ─── bb_v6 전용 파라미터 ───
+  # 밴드 기울기(slope) direction 보강 + Squeeze 감지
+  # 상/중/하단 밴드 N캔들 변화율 부호(+1/-1/0)를 합산하여 direction에 가산 (최대 ±1.5)
+  slope_lookback: 3             # 밴드 N캔들 변화율 계산 구간 (캔들 수)
+  slope_threshold: 0.001        # 유의미한 slope 최소 절대값 (가격 대비 비율, 0.1%)
+  slope_weight: 0.5             # 각 밴드 부호에 곱할 가중치 (세 밴드 모두 정렬 시 ±1.5)
+  squeeze_bbw_ratio: 0.7        # BBW < rolling 평균 * 이 비율이면 squeeze 감지
+  block_entry_on_squeeze: true  # squeeze 구간을 강제로 sideways로 취급 (추세 오판 방지)
 
 # ─── 백테스트 설정 ───
 backtest:

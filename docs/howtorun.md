@@ -98,7 +98,7 @@ python -m src.main backtest -e binance_futures -s BTC/USDT --start 2026-01-01 --
 python -m src.main backtest -e binance_futures -s BTC/USDT --start 2026-03-01 --end 2026-01-31 --capital 100
 
 # 자동 collect 관련
-python -m src.main backtest -e binance_futures -s btc --start 2026-04-12 
+python -m src.main backtest -e binance_futures -s btc --start 2026-04-12
 python -m src.main backtest -e binance_futures -s btc --start 2026-01-01 --no-auto-collect
 
 # 자본금/레버리지 지정

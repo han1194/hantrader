@@ -1,5 +1,80 @@
 # HanTrader 변경 이력
 
+## 2026-04-21 BB V6 전략 추가 (밴드 기울기 + Squeeze 감지)
+
+`detect_regime()`가 EMA/SMA/MACD/DI 등 후행 지표에 의존하는 구조적 한계 — 하락 중 되돌림에 쉽게 오염되어
+direction이 임계값(|>=2.0|)을 못 채우고 sideways로 빠지는 사례 다수. 후행성을 추가하지 않으면서
+"밴드 자체의 움직임"을 국면 판단에 직접 반영하는 접근을 추가한다.
+
+### 신규 전략
+
+- **BB V6 (`bb_v6`)** — BBV2Strategy 상속, `compute_indicators` / `detect_regime` 오버라이드
+  - **(A) 밴드 기울기(slope) direction 보강**
+    - 상/중/하단 밴드의 `slope_lookback`(기본 3) 캔들 변화율을 가격 비율로 정규화
+    - `slope_threshold`(기본 0.001 = 0.1%) 이상일 때만 +1/-1 부호 인정
+    - 세 밴드 부호 합산(-3~+3) × `slope_weight`(기본 0.5)를 direction에 가산 → 최대 ±1.5 기여
+    - 세 밴드 모두 정렬되는 강한 추세에서 direction이 임계값 도달 용이
+  - **(B) Squeeze 감지 → sideways 강제**
+    - `bb_width` < rolling(`regime_window`) 평균 × `squeeze_bbw_ratio`(기본 0.7)면 squeeze
+    - `block_entry_on_squeeze=true`(기본)면 squeeze 구간의 모든 regime을 SIDEWAYS로 덮어씀
+    - V2의 `min_bbw_for_sideways`(절대 폭 필터)와 병행 — 절대 좁음 + 상대 좁음 모두 체크
+  - 시그널/진입 로직은 BB V2 그대로 (국면 판단만 변경)
+
+### 검증 (BTC/USDT 1h, 최근 500캔들)
+
+- V2 추세 캔들 254 → V6 224 (squeeze 덮어쓰기로 30캔들 감소)
+- 04-18 19:00 slope_sum=-2, 04-18 22:00 slope_sum=-3 (세 밴드 모두 하락) — direction에 -1/-1.5 가산되지만
+  strength(ADX+BBW 확대 기반)가 여전히 2.0 미만이라 sideways 유지. strength 쪽 보강은 차후 과제(V3 B조합 등).
+- 04-18 15:00~04-19 00:00 구간에서 squeeze로 sideways 강제되는 캔들 다수 감지 — 밴드 수렴 구간 추세 오판 방지 효과 확인
+
+### 한계
+
+- V6는 **direction**만 보강. strength(추세 강도)는 기존처럼 ADX/BBW 확대에 의존 → ADX가 25 턱걸이에 못 미치면
+  여전히 sideways로 분류됨. "하락 중 되돌림에서 추세로 판단"까지 가려면 V3(B조합, ADX OR 차단)나
+  별도 strength 보강 필요.
+
+### 수정/추가 파일
+
+- `src/strategy/bb_v6_strategy.py` — 신규
+- `src/strategy/__init__.py` — BBV6Strategy export
+- `src/config.py` — `StrategyConfig`에 `slope_lookback/slope_threshold/slope_weight/squeeze_bbw_ratio/block_entry_on_squeeze` 필드 추가, `to_strategy_kwargs`/`from_yaml` 분기
+- `config/config.yaml` — bb_v6 파라미터 섹션, `strategy.name` 선택지 업데이트
+- `CLAUDE.md` — 전략 설명/구현 상태 추가
+
+---
+
+## 2026-04-21 BB V5 전략 추가 (Regime Hysteresis)
+
+`bb_v2` 리포트에서 04-18 19:00 지표 분석: ADX=24.71(25 턱걸이 하락) + BBW 축소(-58%) + direction=-1.5로
+`detect_regime()`의 strength/direction 임계값을 모두 놓침 → sideways로 오판. 실제 차트는 하락 추세의
+일시 정지(쉬어가기) 구간. 지표가 모두 후행(EMA/MACD/DI)이라 되돌림에 쉽게 오염되는 구조적 문제.
+
+### 신규 전략
+
+- **BB V5 (`bb_v5`)** — BBV2Strategy 상속, `detect_regime` 오버라이드
+  - **규칙**: 부모의 raw regime에 hysteresis 적용
+    - `SIDEWAYS → TREND_*`: 즉시 전환 (추세 시작 즉시 포착)
+    - `TREND_* → SIDEWAYS`: raw가 `hysteresis_candles`(기본 3) 캔들 **연속** SIDEWAYS일 때만 전환
+    - `TREND_UP ↔ TREND_DOWN`: 즉시 전환 (강한 반전 신호)
+  - 1캔들 짜리 휘청임으로 추세가 종료되는 것을 방지, 추세의 일시 정지를 유지
+  - 시그널/진입 로직은 BB V2 그대로 (detect_regime만 변경)
+
+### 검증 (BTC/USDT 1h, 최근 500캔들)
+
+- V2 추세 캔들 253 → V5 297 (hysteresis로 조기 이탈 44캔들 방지)
+- 04-18 15~16:00: V2 sideways → V5 `trend_up` 유지 (Position #10 포지션이 trend 상태로 관리됨)
+- 04-18 17:00 이후는 sideways 누적 3캔들 충족으로 V5도 sideways 전환 (더 긴 `hysteresis_candles`로 지연 가능)
+
+### 수정/추가 파일
+
+- `src/strategy/bb_v5_strategy.py` — 신규
+- `src/strategy/__init__.py` — BBV5Strategy export
+- `src/config.py` — `StrategyConfig.hysteresis_candles` 필드, `to_strategy_kwargs`/`from_yaml` 분기
+- `config/config.yaml` — bb_v5 파라미터 섹션, `strategy.name` 선택지 업데이트
+- `CLAUDE.md` — 전략 설명 추가
+
+---
+
 ## 2026-04-21 BB V3 / BB V4 전략 추가 (국면 오판 진입 방지)
 
 `bb_v2` 백테스트 리포트에서 상승추세 중 횡보 short 진입(04-13 23:00) 및 하락추세 중 횡보 long 진입(04-18~04-20)이 확인됨.
