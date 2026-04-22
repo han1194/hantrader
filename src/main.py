@@ -307,6 +307,7 @@ def cmd_backtest(args, cfg: AppConfig):
         try:
             from src.visualize import TradeChart
             from src.visualize.chart import trades_to_position_spans
+            from src.strategy.base import Signal, SignalType
             chart = TradeChart(
                 exchange=exchange, symbol=symbol, timeframe=timeframe,
                 bb_period=cfg.strategy.bb_period, bb_std=cfg.strategy.bb_std,
@@ -314,9 +315,30 @@ def cmd_backtest(args, cfg: AppConfig):
             safe_symbol = symbol.replace("/", "_")
             date_dir = datetime.now().strftime("%Y%m%d")
             chart_dir = Path(bt.output_dir) / date_dir / safe_symbol
+
+            # 강제청산(백테스트 종료)은 원 signals에 없으므로 trades에서 합성
+            # 같은 position_id의 물타기는 청산정보가 동일하므로 1회만 추가
+            synth_exits: list[Signal] = []
+            seen_pos: set[int] = set()
+            for t in trades:
+                if t.position_id in seen_pos:
+                    continue
+                reason = t.exit_reason or ""
+                if "백테스트 종료" in reason or "강제청산" in reason:
+                    st = (SignalType.STOP_LOSS if "강제청산" in reason
+                          else (SignalType.LONG_EXIT if t.side == "long" else SignalType.SHORT_EXIT))
+                    synth_exits.append(Signal(
+                        timestamp=t.exit_time,
+                        signal_type=st,
+                        price=t.exit_price,
+                        leverage=t.leverage,
+                        reason=reason,
+                    ))
+                    seen_pos.add(t.position_id)
+
             chart_path = chart.render(
                 df=df,
-                signals=signals,
+                signals=list(signals) + synth_exits,
                 position_spans=trades_to_position_spans(trades),
                 equity_df=equity_df,
                 output_dir=chart_dir,

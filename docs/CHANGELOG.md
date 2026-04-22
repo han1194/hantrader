@@ -1,5 +1,46 @@
 # HanTrader 변경 이력
 
+## 2026-04-22 백테스트 리포트/차트 개선 3건
+
+`docs/변경이력 내용001.txt` Q4에서 대시보드/차트 정상 동작 확인 중 발견된 3개 이슈 수정.
+
+### Fix #1 — 통계 카운트 단위 포지션 기준으로 통일
+
+대시보드/텍스트 리포트의 "총 거래 N / 승 W / 패 L"이 trade row(물타기 포함) 기준이어서
+"포지션 #N" 라벨 및 차트 음영(포지션 기준)과 단위가 혼재. 4h 리포트에서 `6 ≠ 3+2`처럼 숫자가
+안 맞아 보이는 원인.
+
+- `BacktestEvaluator.evaluate`가 `position_id`로 묶어 **포지션 단위 PnL 합산** 후 집계하도록 수정
+- `BacktestMetrics`에 `neutral_trades`(무손익 포지션) 필드 추가 → 승+패+무 = 총 포지션 일관 성립
+- 텍스트 리포트: "총 거래 수" → **"총 포지션 수"**, "평균 거래 손익" → "포지션당 평균 손익",
+  부제 `(포지션 단위 · 물타기 합산)` 표기
+- HTML 대시보드 요약 카드: "총 거래" → **"총 포지션"**, 디스크립션 `승/패/무` 3분할 표기
+
+### Fix #2 — 백테스트 종료 강제청산이 차트에서 보이지 않던 문제
+
+백테스트 종료 시점에 열려 있던 포지션이 `_close_position`으로 강제청산되지만,
+① 원 signals 리스트에 해당 exit 시그널이 없어 마커 누락, ② 진입~청산 시각이 동일하면 `vrect`
+폭이 0이라 음영이 안 보이던 케이스(4h #5).
+
+- `main.py` backtest: `trades`에서 `exit_reason`에 `백테스트 종료`/`강제청산`을 포함한 exit를 찾아
+  **`Signal` 객체를 합성**해 원 signals 뒤에 추가(`position_id` 기준 중복 제거)
+- `TradeChart._add_position_spans`: `x1 <= x0`이면 `df.index.searchsorted`로 **다음 캔들 시각까지
+  음영 확장**(마지막 캔들인 경우 평균 간격만큼 뒤로 연장)
+
+### Fix #3 — `BB상단도달` / `BB하단도달` 라벨 오류 수정
+
+BB%=0.65/0.35는 **밴드에 도달한 지점이 아니라 횡보 반전매매의 청산 임계값**.
+1h 리포트 #18에서 `BB%=0.34`에 "하단도달" 표기가 차트상 하단과 위치가 달라 혼란 유발.
+
+- `bb_strategy.py`의 횡보 익절/청산 라벨:
+  - `BB상단도달` → **`BB상단영역`** (BB% ≥ 0.65 → 상단 1/3 구간)
+  - `BB하단도달` → **`BB하단영역`** (BB% ≤ 0.35 → 하단 1/3 구간)
+
+변경 파일: `src/backtest/evaluator.py`, `src/backtest/report.py`, `src/visualize/chart.py`,
+`src/main.py`, `src/strategy/bb_strategy.py`, `docs/CHANGELOG.md`.
+
+---
+
 ## 2026-04-22 BB V7 전략 추가 (가격-밴드 돌파 기반 국면 판단 + Hysteresis)
 
 BTC/USDT 1h `report_1h_122842.txt` 차트 분석에서, 사용자 차트 관점 국면 판단과 V6 프로그램 판단의 불일치가

@@ -90,31 +90,23 @@ python -m src.main strategy -e binance_futures -s BTC/USDT -t 1h
 python -m src.main backtest -e binance_futures -s BTC/USDT
 
 # 여러 코인 동시 백테스트 (쉼표 구분)
-python -m src.main backtest -e binance_futures -s BTC/USDT,ETH/USDT,XRP/USDT,SOL/USDT,DOGE/USDT
+python -m src.main backtest -e binance_futures -s BTC/USDT,ETH/USDT
 
 # 기간 지정
 python -m src.main backtest -e binance_futures -s BTC/USDT --start 2026-01-01 --end 2026-03-31
 python -m src.main backtest -e binance_futures -s BTC/USDT --start 2026-01-01 --capital 100
-python -m src.main backtest -e binance_futures -s BTC/USDT --start 2026-03-01 --end 2026-01-31 --capital 100
-
-# 자동 collect 관련
-python -m src.main backtest -e binance_futures -s btc --start 2026-04-12
-python -m src.main backtest -e binance_futures -s btc --start 2026-01-01 --no-auto-collect
+python -m src.main backtest -e binance_futures -s BTC/USDT --start 2026-04-01 --capital 100
 
 # 자본금/레버리지 지정
 python -m src.main backtest -e binance_futures -s BTC/USDT --capital 5000 --leverage-max 30
 
 # 실제 테스트
 python -m src.main backtest -e binance_futures -s BTC/USDT --start 2026-01-01 --capital 100
-
-# 자동 수집 비활성화 (DB에 있는 데이터만 사용)
-python -m src.main backtest -e binance_futures -s BTC/USDT --no-auto-collect
 ```
 
 - 리포트 출력: `data/backtest/` (텍스트, HTML 대시보드, 거래 내역 CSV)
 - 실행마다 타임스탬프 포함 파일명으로 이력 보존
 - `--start` 지정 시 자동으로 100캔들 워밍업 데이터 추가 로드
-- **자동 수집 (기본 활성화)**: 백테스트 실행 전에 `DataCollector`로 DB 마지막 시점부터 `--end`(미지정 시 최신)까지 자동으로 이어서 수집하고 CSV도 함께 출력. 매일 하루치 데이터만 부족할 때 별도로 `collect` 명령을 실행할 필요 없음. 네트워크/거래소 오류 시 경고만 출력하고 기존 DB 데이터로 백테스트 진행. 비활성화하려면 `--no-auto-collect`
 
 ### 평가 지표
 
@@ -200,61 +192,7 @@ python -m src.main trade -e binance_futures -s BTC/USDT --leverage-max 25 --leve
 
 ---
 
-## 7. 차트 생성 (chart)
-
-DB에 저장된 OHLCV 데이터와 매매 기록으로 plotly HTML 차트를 생성합니다. 캔들, BB 밴드, 매매 신호 화살표, 포지션 진입 구간 음영, 자본 곡선을 한 HTML에 담습니다.
-
-```bash
-# 기본 실행: 실거래(trader) 매매기록 기준, 최근 2000 캔들
-python -m src.main chart -e binance_futures -s BTC/USDT -t 1h
-
-# 백테스트 결과 차트 (backtest_trades 테이블)
-python -m src.main chart -e binance_futures -s BTC/USDT -t 1h --mode backtest
-
-# 시뮬레이터 결과 차트 (simulator_trades 테이블)
-python -m src.main chart -e binance_futures -s BTC/USDT -t 1h --mode simulator
-
-# 기간 지정
-python -m src.main chart -e binance_futures -s BTC/USDT -t 1h --start 2026-03-01 --end 2026-04-01
-
-# 캔들 수 제한 변경
-python -m src.main chart -e binance_futures -s BTC/USDT -t 1h --limit 5000
-
-# 출력 경로 지정
-python -m src.main chart -e binance_futures -s BTC/USDT -t 1h -o data/charts
-```
-
-- `--mode` (기본 trader): `trader` → trades 테이블(실거래) / `backtest` → backtest_trades / `simulator` → simulator_trades
-- 출력: `data/charts/{mode}/{SYMBOL}/chart_*_{mode}-history_*.html`
-- 신호 마커: LONG 진입 ▲(녹색), SHORT 진입 ▼(적색), 청산 ■(황), 손절 ✕(보라), 익절 ★(청)
-- 포지션 진입 구간은 반투명 녹/적색 음영 + 평균가 점선으로 표시
-- `--limit` 미지정 + `--start` 미지정 시 최근 2000 캔들만 렌더링 (대형 HTML 방지)
-- backtest/simulator 모드는 `--timeframe`으로 해당 TF 매매기록만 필터링
-- 매매 기록이 없으면 경고 출력 후 OHLCV/BB만 표시
-
-### 자동 차트 생성
-
-다음 명령들은 종료 시점에 자동으로 차트 HTML을 생성합니다 (in-memory 데이터 기반).
-
-- `backtest`: `data/backtest/{date}/{SYMBOL}/chart_{tf}_{timestamp}.html`
-- `simulate`: `data/simulator/{SYMBOL}/charts/chart_{tf}_{timestamp}.html`
-- `trade`: `data/trader/{SYMBOL}/charts/chart_{tf}_{timestamp}.html`
-
-### DB 저장 (매매 기록 재조회용)
-
-세 가지 모드가 각기 다른 테이블에 자동 저장됩니다 (스키마 동일).
-
-| 모드 | 테이블 | 재실행 시 동작 |
-|------|--------|-----------------|
-| `trader` | `trades` | 누적 (보호) |
-| `backtest` | `backtest_trades` | 동일 exchange/symbol/timeframe 행 삭제 후 재저장 |
-| `simulator` | `simulator_trades` | 누적 (세션 이어서) |
-
-`chart --mode ...` 로 해당 테이블에서 과거 결과를 다시 시각화할 수 있습니다.
-
----
-
-## 8. 거래소 목록 (list-exchanges)
+## 7. 거래소 목록 (list-exchanges)
 
 ```bash
 python -m src.main list-exchanges
@@ -374,5 +312,4 @@ strategy:
 3. backtest → 과거 데이터 시뮬레이션 (전략 검증)
 4. simulate → 실시간 페이퍼 트레이딩 (실전 검증)
 5. trade    → 실거래 실행 (API 키 필요)
-6. chart    → DB 데이터/매매기록 → HTML 시각화
 ```

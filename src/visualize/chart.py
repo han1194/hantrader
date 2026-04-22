@@ -298,7 +298,12 @@ class TradeChart:
     def _add_position_spans(
         self, fig: go.Figure, spans: list[PositionSpan], df: pd.DataFrame, row: int,
     ):
-        """포지션 보유 구간을 배경 음영으로 표시하고, 평단가 선을 그린다."""
+        """포지션 보유 구간을 배경 음영으로 표시하고, 평단가 선을 그린다.
+
+        exit_time이 entry_time과 같거나 매우 가까워 폭이 0이 되는 경우
+        (예: 백테스트 종료 시점 강제청산) 다음 캔들 시각까지 확장해서
+        음영이 시각적으로 보이도록 한다.
+        """
         if not spans:
             return
 
@@ -312,6 +317,19 @@ class TradeChart:
                 continue
             if x1 < x_min or x0 > x_max:
                 continue
+
+            # 폭 0 방지: 진입~청산이 같은 시각이면 다음 캔들까지 확장
+            if x1 <= x0:
+                try:
+                    next_idx = df.index.searchsorted(x0, side="right")
+                    if 0 <= next_idx < len(df.index):
+                        x1 = df.index[next_idx]
+                    elif len(df.index) >= 2:
+                        # 마지막 캔들인 경우: 평균 간격만큼 뒤로 연장
+                        step = df.index[-1] - df.index[-2]
+                        x1 = x0 + step
+                except Exception:
+                    pass
 
             color = "rgba(34,197,94,0.10)" if sp.side == "long" else "rgba(239,68,68,0.10)"
             fig.add_vrect(

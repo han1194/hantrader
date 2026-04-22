@@ -180,17 +180,18 @@ class BacktestReport:
         lines.append(f"  Win Rate:       {metrics.win_rate:>10.2%}   (수익 거래 비율)")
         lines.append(f"  Profit Factor:  {metrics.profit_factor:>10.3f}   (총수익/총손실. 1↑ 수익, 2↑ 우수)")
 
-        # --- 거래 통계 ---
+        # --- 거래 통계 (포지션 단위) ---
         lines.append("")
-        lines.append("[ 거래 통계 ]")
-        lines.append(f"  총 거래 수:     {metrics.total_trades:>10d}")
-        lines.append(f"  수익 거래:      {metrics.winning_trades:>10d}")
-        lines.append(f"  손실 거래:      {metrics.losing_trades:>10d}")
+        lines.append("[ 거래 통계 ] (포지션 단위 · 물타기 합산)")
+        lines.append(f"  총 포지션 수:   {metrics.total_trades:>10d}")
+        lines.append(f"  수익 포지션:    {metrics.winning_trades:>10d}")
+        lines.append(f"  손실 포지션:    {metrics.losing_trades:>10d}")
+        lines.append(f"  무손익 포지션:  {metrics.neutral_trades:>10d}")
         lines.append(f"  평균 수익:    {metrics.avg_win:>+12,.2f} USDT")
         lines.append(f"  평균 손실:    {metrics.avg_loss:>+12,.2f} USDT")
         lines.append(f"  최대 수익:    {metrics.largest_win:>+12,.2f} USDT")
         lines.append(f"  최대 손실:    {metrics.largest_loss:>+12,.2f} USDT")
-        lines.append(f"  평균 거래 손익: {metrics.avg_trade_pnl:>+10,.2f} USDT")
+        lines.append(f"  포지션당 평균 손익: {metrics.avg_trade_pnl:>+10,.2f} USDT")
 
         # --- 월별 수익 ---
         if metrics.monthly_returns is not None and not metrics.monthly_returns.empty:
@@ -551,12 +552,12 @@ class BacktestReport:
         <div class="desc">총수익/총손실 (1↑수익)</div>
     </div>
     <div class="card">
-        <div class="label">총 거래</div>
+        <div class="label">총 포지션</div>
         <div class="value">{metrics.total_trades}</div>
-        <div class="desc">승 {metrics.winning_trades} / 패 {metrics.losing_trades}</div>
+        <div class="desc">승 {metrics.winning_trades} / 패 {metrics.losing_trades} / 무 {metrics.neutral_trades}</div>
     </div>
     <div class="card">
-        <div class="label">평균 거래 손익</div>
+        <div class="label">포지션당 평균 손익</div>
         <div class="value {'positive' if metrics.avg_trade_pnl >= 0 else 'negative'}">{metrics.avg_trade_pnl:+,.2f}</div>
     </div>
     <div class="card">

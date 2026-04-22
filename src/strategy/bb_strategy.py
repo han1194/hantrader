@@ -357,13 +357,13 @@ class BBStrategy(BaseStrategy):
                     ))
                     return signals  # 손절 시 다른 시그널 생성하지 않음
 
-            # BB상단 도달 → 청산 (매도 조건 BB% >= 0.65)
+            # BB 상단영역 진입 → 청산 (매도 조건 BB% >= 0.65)
             if bbp >= 0.65:
                 pnl_pct = (price - entry_price) / entry_price if entry_price > 0 else 0
                 if pnl_pct >= 0:
-                    label = f"횡보 Long 익절 BB상단도달 (BB%={bbp:.2f}, PnL={pnl_pct:.2%})"
+                    label = f"횡보 Long 익절 BB상단영역 (BB%={bbp:.2f}, PnL={pnl_pct:.2%})"
                 else:
-                    label = f"횡보 Long 청산 BB상단도달 (BB%={bbp:.2f}, PnL={pnl_pct:.2%})"
+                    label = f"횡보 Long 청산 BB상단영역 (BB%={bbp:.2f}, PnL={pnl_pct:.2%})"
                 signals.append(Signal(
                     timestamp=ts,
                     signal_type=SignalType.LONG_EXIT,
@@ -412,13 +412,13 @@ class BBStrategy(BaseStrategy):
                     ))
                     return signals
 
-            # BB하단 도달 → 청산 (매수 조건 BB% <= 0.35)
+            # BB 하단영역 진입 → 청산 (매수 조건 BB% <= 0.35)
             if bbp <= 0.35:
                 pnl_pct = (entry_price - price) / entry_price if entry_price > 0 else 0
                 if pnl_pct >= 0:
-                    label = f"횡보 Short 익절 BB하단도달 (BB%={bbp:.2f}, PnL={pnl_pct:.2%})"
+                    label = f"횡보 Short 익절 BB하단영역 (BB%={bbp:.2f}, PnL={pnl_pct:.2%})"
                 else:
-                    label = f"횡보 Short 청산 BB하단도달 (BB%={bbp:.2f}, PnL={pnl_pct:.2%})"
+                    label = f"횡보 Short 청산 BB하단영역 (BB%={bbp:.2f}, PnL={pnl_pct:.2%})"
                 signals.append(Signal(
                     timestamp=ts,
                     signal_type=SignalType.SHORT_EXIT,

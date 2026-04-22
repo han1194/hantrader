@@ -28,6 +28,7 @@ data/backtest/
 data/simulator/
 data/trader/
 data/logs/
+data/charts/
 
 # Logs
 logs/

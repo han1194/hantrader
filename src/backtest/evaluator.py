@@ -34,10 +34,11 @@ class BacktestMetrics:
     win_rate: float = 0.0
     profit_factor: float = 0.0
 
-    # 거래 통계
-    total_trades: int = 0
-    winning_trades: int = 0
-    losing_trades: int = 0
+    # 거래 통계 (포지션 단위: 같은 position_id의 진입/물타기를 하나로 집계)
+    total_trades: int = 0       # 총 포지션 수
+    winning_trades: int = 0     # 수익 포지션 수 (net PnL > 0)
+    losing_trades: int = 0      # 손실 포지션 수 (net PnL < 0)
+    neutral_trades: int = 0     # 무손익 포지션 수 (net PnL == 0)
     avg_win: float = 0.0
     avg_loss: float = 0.0
     largest_win: float = 0.0
@@ -78,11 +79,16 @@ class BacktestEvaluator:
         metrics.total_pnl = metrics.final_capital - initial_capital
         metrics.total_return_pct = metrics.total_pnl / initial_capital
 
-        # 거래 통계
-        pnls = [t.pnl for t in trades]
-        metrics.total_trades = len(trades)
+        # 거래 통계 — 포지션 단위 집계 (같은 position_id의 물타기를 합산해서 1건으로)
+        position_pnls: dict[int, float] = {}
+        for t in trades:
+            position_pnls[t.position_id] = position_pnls.get(t.position_id, 0.0) + t.pnl
+        pnls = list(position_pnls.values())
+
+        metrics.total_trades = len(pnls)
         metrics.winning_trades = sum(1 for p in pnls if p > 0)
         metrics.losing_trades = sum(1 for p in pnls if p < 0)
+        metrics.neutral_trades = sum(1 for p in pnls if p == 0)
         metrics.win_rate = metrics.winning_trades / metrics.total_trades if metrics.total_trades > 0 else 0
 
         wins = [p for p in pnls if p > 0]
@@ -94,7 +100,7 @@ class BacktestEvaluator:
         metrics.largest_loss = min(losses) if losses else 0
         metrics.avg_trade_pnl = np.mean(pnls) if pnls else 0
 
-        # Profit Factor
+        # Profit Factor (포지션 단위 PnL 합산과 동일, trade-row 집계와 값은 같음)
         total_wins = sum(wins) if wins else 0
         total_losses = abs(sum(losses)) if losses else 0
         metrics.profit_factor = total_wins / total_losses if total_losses > 0 else float("inf") if total_wins > 0 else 0
