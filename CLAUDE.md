@@ -26,7 +26,7 @@ hantrader/
 │   ├── core/             # 공통 엔진 (LiveEngineBase: 시뮬레이터/트레이더 베이스 클래스)
 │   ├── exchange/         # ccxt 거래소 래퍼 (공개 API + 인증 거래 API, 팩토리 패턴)
 │   ├── collector/        # 데이터 수집기 (이어서 수집 지원)
-│   ├── strategy/         # 트레이딩 전략 (BB, BB MTF, BB V2, BB V2 MTF, BB V3, BB V4, BB V5, BB V6)
+│   ├── strategy/         # 트레이딩 전략 (BB, BB MTF, BB V2, BB V2 MTF, BB V3, BB V4, BB V5, BB V6, BB V7)
 │   ├── backtest/         # 백테스트 엔진, 평가, 리포트
 │   ├── simulator/        # 라이브 시뮬레이터 (LiveEngineBase 상속, 페이퍼 트레이딩)
 │   ├── trader/           # 실거래 트레이더 (LiveEngineBase 상속, Binance Futures 실주문)
@@ -85,7 +85,7 @@ hantrader/
 - 중간 동기화: `sync_timeframe` (기본 15m) 캔들마다 거래소와 포지션/잔고 동기화 — liquidation, 외부 청산 등 메인 TF 사이 변화 감지
 - 시작/종료 시에도 거래소 동기화 수행 (잔고, 포지션, 펀딩 수수료)
 - Emergency stop: 진입/추매마다 거래소에 STOP_MARKET 주문 등록 (서버사이드 비상 손절, 마진 콜 방지)
-- 전략은 레지스트리 기반 (`create_strategy(name, **kwargs)`) — config.yaml `strategy.name`으로 선택 ("bb", "bb_mtf", "bb_v2", "bb_v2_mtf", "bb_v3", "bb_v4", "bb_v5", "bb_v6")
+- 전략은 레지스트리 기반 (`create_strategy(name, **kwargs)`) — config.yaml `strategy.name`으로 선택 ("bb", "bb_mtf", "bb_v2", "bb_v2_mtf", "bb_v3", "bb_v4", "bb_v5", "bb_v6", "bb_v7")
 - BB MTF 전략: 기준 TF 위/아래 인접 TF 국면을 가중 투표로 합산, 허위 국면 전환 필터링 (예: 1h → 30m/2h 참고)
 - BB V2 전략: BBW 최소 기준(`min_bbw_for_sideways`) + 추세 물타기 최소 간격(`min_entry_interval`) 추가, 기존 BB 전략 상속
 - BB V2 MTF 전략: BB V2 + MTF 국면 판단 결합
@@ -93,6 +93,7 @@ hantrader/
 - BB V4 전략: BB V2 상속 + 국면 전환(trend→sideways) 쿨다운(`cooldown_candles`, 기본 5) — 전환 직후 N캔들 동안 횡보 **신규진입**만 차단 (물타기/청산 영향 없음)
 - BB V5 전략: BB V2 상속 + Regime hysteresis(`hysteresis_candles`, 기본 3) — trend→sideways 전환을 N캔들 연속 sideways 조건 만족 시에만 허용 (추세의 일시 정지를 추세 종료로 오판 방지). sideways→trend 및 trend_up↔trend_down은 즉시 허용
 - BB V6 전략: BB V2 상속 + 밴드 기울기(상/중/하단 slope) 정렬을 direction에 가산(`slope_lookback`/`slope_threshold`/`slope_weight`, 기본 3/0.001/0.5, 세 밴드 모두 정렬 시 ±1.5) + Squeeze 감지(`squeeze_bbw_ratio`, 기본 0.7; BBW가 rolling 평균의 해당 비율 미만이면 squeeze) 시 sideways 강제(`block_entry_on_squeeze=true`) — 후행 지표 의존을 완화하여 밴드 자체 움직임으로 국면 방향성 보강
+- BB V7 전략: BB V2 상속 + **가격-밴드 돌파 기반 국면 판단** + V5 방식 hysteresis — ADX/EMA/MACD/DI 등 후행 지표 의존을 완전히 제거. 추세 상승 = (BB 폭 > 직전 N봉 평균 폭 × `width_expand_ratio`) AND (종가 > 직전 N봉 close 최고가 × (1 + `break_buffer_pct`)). 추세 하락은 하단 대칭. 그 외 횡보. 기본값 `width_lookback=5`/`width_expand_ratio=1.05`/`break_lookback=5`/`break_buffer_pct=0.001`/`hysteresis_candles=3`. V6의 squeeze 강제 sideways가 하락 추세 중 BB 수축을 횡보로 오판하는 문제 해결
 - 매매 기록 DB 저장: 모드별로 3개 테이블에 분리 저장 — 실거래=`trades`, 백테스트=`backtest_trades`, 시뮬레이터=`simulator_trades` (모두 동일 스키마)
 - `DatabaseStorage.TRADE_TABLES` dict로 모드→테이블 매핑, `save_trade(..., mode=...)` / `load_trades(..., mode=...)` / `clear_trades(exchange, symbol, mode, timeframe=...)` 제공
 - `BacktestEngine`은 `db`/`save_mode`/`timeframe` 인자로 DB 저장 활성화 (main.py가 `db`, `save_mode="backtest"` 주입, 실행 전 이전 결과 `clear_trades`)
@@ -116,6 +117,7 @@ hantrader/
 - [x] BB V4 전략 (bb_v4) — V2 + 국면 전환(trend→sideways) 쿨다운(C), 전환 애매 구간 신규진입 차단
 - [x] BB V5 전략 (bb_v5) — V2 + Regime hysteresis, 추세 일시 정지를 추세 종료로 오판하지 않도록 trend→sideways 전환에 N캔들 연속 조건 요구
 - [x] BB V6 전략 (bb_v6) — V2 + 밴드 기울기(상/중/하단 slope) direction 보강(±1.5) + Squeeze 감지 시 sideways 강제, 후행 지표 의존 완화로 국면 방향성 판단 개선
+- [x] BB V7 전략 (bb_v7) — V2 + 가격-밴드 돌파 기반 국면 판단(BB폭 확장 AND 종가가 직전 N봉 고점/저점 돌파) + V5 hysteresis. 후행 지표 의존 제거로 추세 진입/종료 지연 해소, V6의 squeeze 강제 sideways 오판 해결
 - [~] 업비트 거래소 지원 (`src/exchange/upbit.py` — 2026-04-17 병합 시점에 파일만 포팅됨, 팩토리/심볼정규화/인증 코드 통합 필요)
 - [x] 백테스트 엔진 (시뮬레이션, 평가 지표, 텍스트/HTML 리포트, 국면별/방향별 분석 통계)
 - [x] 백테스트 자동 수집 (실행 전 DB 마지막 시점 → 최신까지 이어서 수집 + CSV 출력, `--no-auto-collect`로 비활성화)

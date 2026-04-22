@@ -1,5 +1,74 @@
 # HanTrader 변경 이력
 
+## 2026-04-22 BB V7 전략 추가 (가격-밴드 돌파 기반 국면 판단 + Hysteresis)
+
+BTC/USDT 1h `report_1h_122842.txt` 차트 분석에서, 사용자 차트 관점 국면 판단과 V6 프로그램 판단의 불일치가
+다수 확인됨. 특히 04-18 02:00 ~ 04-20 00:00 약 46시간 하락 구간을 V6는 `trend_up 꼬리 → sideways →
+trend_down → sideways`로 4토막 내서 판단(포지션 #11/#12/#13 손실의 직접 원인).
+
+진단한 근본 원인:
+
+- `detect_regime`가 ADX/EMA/MACD/DI 등 후행 지표 합의에 의존 → 추세 진입/종료 지연
+- V6의 squeeze 강제 sideways가 "하락 추세 중 일시적 BB 수축"을 추세 종료로 오판
+
+사용자 제안(차트 직관 직접 코드화)을 (b)종가 기준 + (β)V5 hysteresis 조합으로 구현한다.
+
+### 신규 전략
+
+- **BB V7 (`bb_v7`)** — BBV2Strategy 상속, `compute_indicators` / `detect_regime` 오버라이드
+  - **Raw 국면 판단 (후행 지표 완전 제거)**
+    - `width_expanded`: 현재 `bb_width` > 직전 `width_lookback`(기본 5) 봉 평균 × `width_expand_ratio`(기본 1.05)
+    - `break_up`: 종가 > 직전 `break_lookback`(기본 5) 봉 close 최고가 × (1 + `break_buffer_pct`(기본 0.001=0.1%))
+    - `break_down`: 종가 < 직전 N봉 close 최저가 × (1 - `break_buffer_pct`)
+    - `TREND_UP = width_expanded & break_up`, `TREND_DOWN = width_expanded & break_down`, 그 외 SIDEWAYS
+    - `break_buffer_pct`는 wick 찔러 지나가는 노이즈 캔들이 trend 트리거되는 것을 방지
+  - **V5 방식 Hysteresis 적용**
+    - `sideways → trend`: 즉시 전환 (추세 시작 놓치지 않음)
+    - `trend → sideways`: `hysteresis_candles`(기본 3) 캔들 연속 sideways 조건 만족 시에만 전환
+    - `trend_up ↔ trend_down`: 즉시 전환 (강한 반전 신호)
+  - 시그널/진입 로직은 BB V2 그대로, 국면 판단만 변경
+
+### 검증 (BTC/USDT 1h, 2026-04-15 ~ 04-20 구간)
+
+사용자 차트 판단 기준 주요 개선:
+
+| 구간 | V6 판단 | V7 판단 | 사용자 판단 |
+| --- | --- | --- | --- |
+| 04-17 17:00 추세 상승 시작 | 22:00에 포착 (5h 지연) | **17:00 즉시 포착 ✓** | 16:00 ~ (1h 차이) |
+| 04-18 02:00 ~ 04-20 00:00 하락 | 4토막(trend_up 꼬리/sideways/trend_down/sideways) | **대부분 trend_down 포착 ✓** | 연속 추세 하락 |
+| 04-18 20:00 ~ 22:00 | sideways (오판) | **trend_down ✓** | 추세 하락 |
+| 04-19 01:00 ~ 05:00 | sideways (오판) | **trend_down ✓** | 추세 하락 |
+
+잔여 오판(사용자 기준):
+
+- 04-15 15:00 ~ 18:00 허위 trend_down (3캔들, hysteresis 전에는 발생)
+- 04-16 04:00 ~ 06:00 허위 trend_up (짧은 스파이크)
+- 04-17 00:00 ~ 06:00 허위 trend_up (횡보 마지막 단계의 작은 돌파)
+
+→ `width_lookback`/`break_lookback`을 7~10으로 늘리거나 `break_buffer_pct`를 0.002~0.003으로
+올리면 감소 가능(파라미터 튜닝 영역).
+
+### 설계 원칙 (사용자 제안 + 보완)
+
+사용자 제안을 다음 해석으로 구체화:
+
+1. **저항/지지선 기준**: (b) 종가 기준 최고/최저 — BB 밴드 자체가 아닌 실제 가격 히스토리 레벨
+   (BB 밴드 자체는 가격을 따라 움직여 돌파 감지력이 약함)
+2. **폭 "커짐" 임계**: 단순 `>` 대신 `× 1.05` 배수 버퍼 (노이즈 방지)
+3. **돌파 여유**: `× (1 ± 0.001)` 버퍼로 wick 노이즈 제거
+4. **추세 종료 조건**: V5 방식 hysteresis (α 순수 재판정보다 안정적, γ 반대 돌파까지 유지보다 빠른 종료)
+
+### 수정/추가 파일
+
+- `src/strategy/bb_v7_strategy.py` — 신규
+- `src/strategy/__init__.py` — BBV7Strategy export
+- `src/config.py` — `StrategyConfig`에 `width_lookback/width_expand_ratio/break_lookback/break_buffer_pct` 필드 추가
+  (`hysteresis_candles`는 V5와 공유), `to_strategy_kwargs`/`from_yaml` 분기, V2 상속 전략 리스트에 `bb_v7` 포함
+- `config/config.yaml` — bb_v7 파라미터 섹션, `strategy.name` 선택지 업데이트
+- `CLAUDE.md` — 전략 설명/구현 상태 추가
+
+---
+
 ## 2026-04-21 BB V6 전략 추가 (밴드 기울기 + Squeeze 감지)
 
 `detect_regime()`가 EMA/SMA/MACD/DI 등 후행 지표에 의존하는 구조적 한계 — 하락 중 되돌림에 쉽게 오염되어

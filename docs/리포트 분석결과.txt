@@ -413,3 +413,18 @@ BB V6 (가칭) — 밴드 기울기 기반 direction 보강:
 
 이 방향으로 V6를 추가할까요? 밴드 slope를 direction에 명시적으로 반영하면 
 현재 MACD/DI의 후행성 문제를 상당 부분 보완할 수 있습니다.
+
+=> V6 추가
+BB V6 문서화 완료 — CLAUDE.md에 레지스트리 목록, 전략 설명, 구현 상태 항목 추가했고 
+   CHANGELOG.md에 V6 항목(기울기/squeeze 메커니즘, 검증 결과, 한계, 수정 파일)을 V5 위에 추가했습니다.
+
+V6 작업 전체 요약:
+
+ - 신규 파일: src/strategy/bb_v6_strategy.py — BBV2Strategy 상속, 
+             compute_indicators에 slope/squeeze 컬럼 추가 
+             + detect_regime에서 밴드 기울기 정렬을 direction에 가산, squeeze 시 sideways 강제
+ - 수정 파일: src/strategy/init.py, src/config.py, config/config.yaml (V6 파라미터 섹션), 
+             CLAUDE.md, docs/CHANGELOG.md
+ - 한계: V6는 direction만 보강. strength(ADX/BBW 확대)는 기존 그대로 
+        — 04-18 19:00 같은 "ADX 25 턱걸이" 구간은 여전히 sideways. 
+        추가 개선은 V3의 B조합(ADX OR 차단)이나 strength 쪽 보강이 필요.

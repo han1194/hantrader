@@ -91,6 +91,13 @@ class StrategyConfig:
     squeeze_bbw_ratio: float = 0.7       # BBW < rolling mean * 이 값 → squeeze
     block_entry_on_squeeze: bool = True  # squeeze 상태를 강제 sideways로 취급
 
+    # V7 전략 파라미터 (name="bb_v7")
+    # 가격-밴드 돌파 기반 국면 판단 + V5 hysteresis
+    width_lookback: int = 5              # BB 폭 평균 계산 기간
+    width_expand_ratio: float = 1.05     # 현재 폭 > N봉 평균 * 이 값 → 확장
+    break_lookback: int = 5              # 직전 고점/저점 조회 기간
+    break_buffer_pct: float = 0.001      # 돌파 최소 여유 (0.1%, wick 노이즈 제거)
+
     def to_strategy_kwargs(
         self,
         *,
@@ -131,8 +138,8 @@ class StrategyConfig:
             kwargs["mtf_weight_lower"] = self.mtf_weight_lower
             kwargs["mtf_trend_threshold"] = self.mtf_trend_threshold
 
-        # V2 전략 파라미터 (bb_v2, bb_v2_mtf, bb_v3~v6는 V2 상속)
-        if self.name in ("bb_v2", "bb_v2_mtf", "bb_v3", "bb_v4", "bb_v5", "bb_v6"):
+        # V2 전략 파라미터 (bb_v2, bb_v2_mtf, bb_v3~v7는 V2 상속)
+        if self.name in ("bb_v2", "bb_v2_mtf", "bb_v3", "bb_v4", "bb_v5", "bb_v6", "bb_v7"):
             kwargs["min_bbw_for_sideways"] = self.min_bbw_for_sideways
             kwargs["min_entry_interval"] = self.min_entry_interval
 
@@ -156,6 +163,14 @@ class StrategyConfig:
             kwargs["slope_weight"] = self.slope_weight
             kwargs["squeeze_bbw_ratio"] = self.squeeze_bbw_ratio
             kwargs["block_entry_on_squeeze"] = self.block_entry_on_squeeze
+
+        # V7 전용 파라미터 (가격-밴드 돌파 + hysteresis)
+        if self.name == "bb_v7":
+            kwargs["width_lookback"] = self.width_lookback
+            kwargs["width_expand_ratio"] = self.width_expand_ratio
+            kwargs["break_lookback"] = self.break_lookback
+            kwargs["break_buffer_pct"] = self.break_buffer_pct
+            kwargs["hysteresis_candles"] = self.hysteresis_candles
 
         return kwargs
 
@@ -366,6 +381,10 @@ class AppConfig:
             slope_weight=strat_raw.get("slope_weight", 0.5),
             squeeze_bbw_ratio=strat_raw.get("squeeze_bbw_ratio", 0.7),
             block_entry_on_squeeze=strat_raw.get("block_entry_on_squeeze", True),
+            width_lookback=strat_raw.get("width_lookback", 5),
+            width_expand_ratio=strat_raw.get("width_expand_ratio", 1.05),
+            break_lookback=strat_raw.get("break_lookback", 5),
+            break_buffer_pct=strat_raw.get("break_buffer_pct", 0.001),
         )
 
         # simple sections

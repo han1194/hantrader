@@ -74,14 +74,15 @@ storage:
     output_dir: "data/csv"
 
 # ─── BB 전략 설정 ───
-# name: "bb", "bb_mtf", "bb_v2", "bb_v2_mtf", "bb_v3", "bb_v4", "bb_v5", "bb_v6"
+# name: "bb", "bb_mtf", "bb_v2", "bb_v2_mtf", "bb_v3", "bb_v4", "bb_v5", "bb_v6", "bb_v7"
 # bb_v2/bb_v2_mtf: BBW 최소 기준 + 물타기 간격 제한 추가
 # bb_v3: V2 + BB% 극단 돌파 필터(A) + ADX OR 차단(B)
 # bb_v4: V2 + 국면 전환(trend→sideways) 쿨다운(C)
 # bb_v5: V2 + 국면 판단 hysteresis (trend→sideways 전환 시 N캔들 연속 조건 요구)
 # bb_v6: V2 + 밴드 기울기(상/중/하단 slope) 정렬 direction 보강 + Squeeze 감지 시 sideways 강제
+# bb_v7: V2 + 가격-밴드 돌파 기반 국면 판단(BB폭 확장 AND 종가가 직전 N봉 고점/저점 돌파) + V5 hysteresis
 strategy:
-  name: "bb_v4"                      # "bb" / "bb_mtf" / "bb_v2" / "bb_v2_mtf" / "bb_v3" / "bb_v4" / "bb_v5" / "bb_v6"
+  name: "bb_v7"                      # "bb" / "bb_mtf" / "bb_v2" / "bb_v2_mtf" / "bb_v3" / "bb_v4" / "bb_v5" / "bb_v6" / "bb_v7"
   # Bollinger Bands 기본
   bb_period: 20
   bb_std: 2.0
@@ -131,6 +132,16 @@ strategy:
   slope_weight: 0.5             # 각 밴드 부호에 곱할 가중치 (세 밴드 모두 정렬 시 ±1.5)
   squeeze_bbw_ratio: 0.7        # BBW < rolling 평균 * 이 비율이면 squeeze 감지
   block_entry_on_squeeze: true  # squeeze 구간을 강제로 sideways로 취급 (추세 오판 방지)
+  # ─── bb_v7 전용 파라미터 ───
+  # 가격-밴드 돌파 기반 국면 판단 (후행지표 ADX/EMA/MACD 의존 제거)
+  #   추세 상승 = 현재 BB폭 > N봉 평균 폭 * width_expand_ratio AND 종가 > 직전 N봉 최고가 * (1 + buffer)
+  #   추세 하락 = 현재 BB폭 > N봉 평균 폭 * width_expand_ratio AND 종가 < 직전 N봉 최저가 * (1 - buffer)
+  #   횡보     = 그 외
+  # 추가로 V5 방식 hysteresis 적용 (trend→sideways 전환 시 N캔들 연속 조건 요구, hysteresis_candles 공유)
+  width_lookback: 5             # BB 폭 평균 계산 기간 (캔들 수)
+  width_expand_ratio: 1.05      # 현재 폭이 N봉 평균의 이 배수 초과면 "확장"
+  break_lookback: 5             # 직전 고점/저점 조회 기간 (캔들 수)
+  break_buffer_pct: 0.001       # 돌파 최소 여유 (0.001=0.1%, wick 노이즈 제거)
 
 # ─── 백테스트 설정 ───
 backtest:
