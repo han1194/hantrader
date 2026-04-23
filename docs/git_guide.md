@@ -329,6 +329,92 @@ git pull github main
 git stash pop
 ```
 
+### 6-6. pull 없이 작업한 후, 원격에 이미 충돌하는 변경이 있을 때
+
+가장 까다로운 상황: 다른 PC에서 같은 부분을 이미 수정/리팩토링해서 push 해 두었는데,
+내가 pull 없이 작업을 시작해 로컬에도 같은 영역을 바꿔버린 경우. 단순 rebase/stash로
+해결하기보다, **로컬 작업을 별도 브랜치로 안전하게 보존**한 뒤 main은 원격을 수용하는 게
+안전하다.
+
+#### 실제 사례 (2026-04-23)
+
+- 회사에서 `src/strategy/` 모듈을 `src/strategy/bb/` 패키지로 분리 리팩토링 후 push
+- 집에서는 pull 없이 같은 모듈을 다른 방식으로 분리 (`bb_indicators.py`, `bb_regime.py` 등)
+- 두 작업이 **동일한 목적**이라 원격 버전을 수용하는 게 합리적이지만, 집에서 한 작업 기록은 남기고 싶음
+
+#### 단계별 절차
+
+1. **상황 파악**
+
+    ```bash
+    git status                                   # 로컬 변경 목록
+    git fetch --all                              # 원격 최신 정보
+    git log main..github/main --oneline          # 원격이 앞서 있는 커밋
+    git diff --name-only main..github/main       # 원격에서 바뀐 파일 목록
+    ```
+
+    → 원격과 로컬이 같은 파일/영역을 건드렸는지 확인.
+
+2. **로컬 작업을 백업 브랜치로 보존**
+
+    ```bash
+    git checkout -b home-refactor-abandon   # 설명적인 이름으로 백업 브랜치 생성
+    git add -A
+    git commit -m "집에서 시도한 리팩토링 (버릴 예정, 참고용)"
+    ```
+
+    이 시점에 로컬 변경은 모두 `home-refactor-abandon` 브랜치에 안전히 기록됨.
+
+3. **main으로 돌아가서 원격 수용**
+
+    ```bash
+    git checkout main
+    # 보통 "behind by N commits, can be fast-forwarded" 상태가 됨
+    git pull
+    ```
+
+    > fast-forward가 가능하면 `git reset --hard`는 **쓰지 말 것** — pull이 더 안전.
+    > main이 이미 앞서 커밋되어 있어 fast-forward가 안 되는 경우에만 `reset --hard github/main` 고려.
+
+4. **결과 확인**
+
+    ```bash
+    git log --oneline -3     # HEAD가 원격 최신 커밋인지
+    git branch               # home-refactor-abandon 브랜치가 남아있는지
+    git status               # working tree clean
+    ```
+
+5. **(선택) 집 버전과 회사 버전 비교**
+
+    ```bash
+    git diff main home-refactor-abandon -- src/strategy/
+    ```
+
+    볼 필요 없으면 나중에 `git branch -D home-refactor-abandon`으로 삭제 가능.
+    하지만 당장 지우지 말고 며칠 두고 원격 버전이 정말 문제 없는지 확인 후 지우는 편이 안전.
+
+#### 핵심 원칙
+
+- **로컬 작업을 먼저 안전하게 보존한 뒤**에만 main을 건드린다 (브랜치 = 사실상 무비용 백업).
+- `git reset --hard`는 되돌릴 수 없으니, `git pull` fast-forward가 가능하면 그것부터 시도.
+- 백업 브랜치는 바로 지우지 말 것. diff/cherry-pick이 필요할 수 있다.
+
+#### PowerShell에서 실행 시 주의
+
+Windows PowerShell 5.1은 bash의 `&&` 체인 연산자를 지원하지 않는다. 각 명령을 **줄바꿈으로 순차 실행**하거나 `; if ($?) { ... }` 패턴을 쓴다.
+
+```powershell
+# ❌ 안 됨
+git add -A && git commit -m "..."
+
+# ✅ 줄바꿈으로 한 줄씩
+git add -A
+git commit -m "..."
+
+# ✅ 조건부 체인 (&& 대체)
+git add -A; if ($?) { git commit -m "..." }
+```
+
 ---
 
 ## 7. PC별 환경 정보
