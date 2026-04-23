@@ -338,3 +338,31 @@ bb_trend.py	        231	    BBTrendMixin._trend_signals + _confirm_trend
 detect_regime 중 바꾸고 싶은 책임만 오버라이드하면 됩니다.
 
 
+============================================================================
+
+2026-04-24-Q1
+
+Q1. 전략 추가
+A:
+BB V8 전략 추가 완료.
+
+정리:
+
+  - src/strategy/bb/v8.py — 새 전략 (BBV8Strategy, 등록명 bb_v8)
+  - src/strategy/bb_v8_strategy.py — 하위 호환 shim
+  - src/strategy/bb/init.py, src/strategy/init.py — export 추가
+  - src/config.py — band_avg_lookback 파라미터 + V2 상속 목록 + V8 kwargs 매핑
+  - config/config.yaml — V8 블록 주석 + band_avg_lookback: 3
+
+국면 규칙 (요청한 추세 상승만, AND 5개):
+
+  1. bb_upper > 직전 band_avg_lookback봉 상단 평균
+  2. close > bb_upper
+  3. bb_lower < 직전 band_avg_lookback봉 하단 평균
+  4. (bb_upper - bb_lower) > 직전봉 폭
+  5. bb_middle > 직전봉 중단
+
+위 5개 AND 만족 → TREND_UP, 그 외 전부 SIDEWAYS. 
+추세 하락은 아직 정의 안 함. 진입/청산/물타기 로직은 BB V2 그대로.
+
+사용: config.yaml에서 strategy.name: "bb_v8"로 바꾸면 바로 백테스트/시뮬/트레이드 가능합니다.
