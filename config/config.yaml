@@ -82,7 +82,7 @@ storage:
 # bb_v6: V2 + 밴드 기울기(상/중/하단 slope) 정렬 direction 보강 + Squeeze 감지 시 sideways 강제
 # bb_v7: V2 + 가격-밴드 돌파 기반 국면 판단(BB폭 확장 AND 종가가 직전 N봉 고점/저점 돌파) + V5 hysteresis
 strategy:
-  name: "bb_v7"                      # "bb" / "bb_mtf" / "bb_v2" / "bb_v2_mtf" / "bb_v3" / "bb_v4" / "bb_v5" / "bb_v6" / "bb_v7"
+  name: "bb"                      # "bb" / "bb_mtf" / "bb_v2" / "bb_v2_mtf" / "bb_v3" / "bb_v4" / "bb_v5" / "bb_v6" / "bb_v7"
   # Bollinger Bands 기본
   bb_period: 20
   bb_std: 2.0

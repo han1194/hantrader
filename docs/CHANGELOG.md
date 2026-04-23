@@ -1,5 +1,53 @@
 # HanTrader 변경 이력
 
+## 2026-04-23 전략 모듈 리팩토링 (동작 변경 없음)
+
+9개로 부풀어 있던 `src/strategy/bb_*.py` 계열 파일과 799줄짜리 `bb_strategy.py`를
+서브패키지 `src/strategy/bb/` 로 재구조화. 외부 import 경로는 shim으로 100% 유지.
+
+### 신규 구조
+
+```text
+src/strategy/
+├── base.py, registry.py  (변경 없음)
+├── bb/                    ← 신규 서브패키지
+│   ├── __init__.py       (전략/상수 재노출)
+│   ├── strategy.py       (BBStrategy — 헬퍼 위임 래퍼, 기존 799→240줄)
+│   ├── levels.py         (LONG/SHORT_ENTRY/STOP_LEVELS 전역 상수)
+│   ├── indicators.py     (compute_bb_indicators — BB/SMA/EMA/MACD/RSI/ADX)
+│   ├── regime.py         (detect_scored_regime — 다중지표 2단계 점수)
+│   ├── leverage.py       (calc_bb_leverage — BBW 기반 동적 레버리지)
+│   ├── position.py       (update_position_state — 시그널→포지션 상태)
+│   ├── sideways.py       (generate_sideways_signals — 횡보 반전매매)
+│   ├── trend.py          (generate_trend_signals + confirm_trend)
+│   ├── hysteresis.py     (apply_regime_hysteresis — V5/V7 공용)
+│   ├── mtf.py, v2.py, v2_mtf.py, v3.py, v4.py, v5.py, v6.py, v7.py
+└── bb_*.py               ← 기존 경로는 얇은 re-export shim으로 유지
+```
+
+### 리팩토링 내용
+
+- **파일 분할**: `BBStrategy`의 단일 파일 799줄을 indicators/regime/leverage/position/
+  sideways/trend 6개 순수 함수 모듈 + levels 상수 모듈로 분리. `BBStrategy` 본체는
+  240줄의 얇은 래퍼로 축소되어 메서드는 헬퍼 함수에 위임.
+- **V5/V7 중복 제거**: 두 전략에 똑같이 복붙되어 있던 `regime hysteresis` 루프를
+  `bb/hysteresis.py`의 `apply_regime_hysteresis()` 순수 함수로 추출. V5/V7은 한 줄
+  호출로 공유.
+- **하위 호환**: 외부 코드가 쓰는 `from src.strategy.bb_strategy import BBStrategy`,
+  `from src.strategy.bb_mtf_strategy import BBMTFStrategy` 등 모든 기존 경로를
+  shim으로 보존. `src/strategy/__init__.py`의 공개 심볼 불변.
+- **동작 동등성**: 500봉 더미 OHLCV로 7개 전략의 시그널 시퀀스 해시를 리팩토링
+  전/후 비교해 완전히 동일함을 확인.
+
+### 의도적으로 제외한 항목 (리스크 대비 이득 작음)
+
+- V2/V4의 `generate_signals` 루프 통합 — 상태 추적이 복잡해 동작 오염 위험.
+- 모듈 전역 `LEVELS` mutation 패턴을 인스턴스 속성으로 전환 — 다중 인스턴스
+  사용 시 미묘한 차이 가능. `levels.py` 전역을 그대로 유지해 기존 의미론 보존.
+
+변경 파일: `src/strategy/bb/` 11개 신규, `src/strategy/bb_*.py` 9개 shim화,
+`docs/CHANGELOG.md`, `CLAUDE.md`.
+
 ## 2026-04-22 백테스트 리포트/차트 개선 3건
 
 `docs/변경이력 내용001.txt` Q4에서 대시보드/차트 정상 동작 확인 중 발견된 3개 이슈 수정.

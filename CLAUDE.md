@@ -26,7 +26,11 @@ hantrader/
 │   ├── core/             # 공통 엔진 (LiveEngineBase: 시뮬레이터/트레이더 베이스 클래스)
 │   ├── exchange/         # ccxt 거래소 래퍼 (공개 API + 인증 거래 API, 팩토리 패턴)
 │   ├── collector/        # 데이터 수집기 (이어서 수집 지원)
-│   ├── strategy/         # 트레이딩 전략 (BB, BB MTF, BB V2, BB V2 MTF, BB V3, BB V4, BB V5, BB V6, BB V7)
+│   ├── strategy/         # 트레이딩 전략 — bb/ 서브패키지(헬퍼 모듈로 분할) + bb_*.py shim
+│   │   ├── base.py, registry.py
+│   │   ├── bb/           # BB 계열 전략 (strategy/v2/v3/v4/v5/v6/v7/mtf/v2_mtf)
+│   │   │                 # + 헬퍼: levels/indicators/regime/leverage/position/sideways/trend/hysteresis
+│   │   └── bb_*.py       # 하위 호환 re-export shim (기존 import 경로 유지)
 │   ├── backtest/         # 백테스트 엔진, 평가, 리포트
 │   ├── simulator/        # 라이브 시뮬레이터 (LiveEngineBase 상속, 페이퍼 트레이딩)
 │   ├── trader/           # 실거래 트레이더 (LiveEngineBase 상속, Binance Futures 실주문)
@@ -62,7 +66,7 @@ hantrader/
 - DB(SQLite)와 CSV 동시 저장
 - 모든 시간은 KST(UTC+9) 기준, datetime에 +09:00 오프셋 표시하지 않음 (naive datetime)
 - 심볼 입력 정규화: btc, BTC, btc/usdt, BTC_USDT → BTC/USDT (바이낸스 선물 USDT 거래 전용)
-- BB전략 진입/손절 레벨은 모듈 상수로 정의 (LONG_ENTRY_LEVELS 등), config.yaml에서 오버라이드 가능
+- BB전략 진입/손절 레벨은 `src/strategy/bb/levels.py` 모듈 상수로 정의 (LONG_ENTRY_LEVELS 등), config.yaml에서 오버라이드 가능. 오버라이드는 BBStrategy.__init__에서 levels 모듈 전역을 재바인딩 — 참조 시 반드시 `from . import levels` 후 `levels.LONG_ENTRY_LEVELS` 로 lazy access
 - 로그: `LogManager` 싱글톤 (`src/utils/log_manager.py`) — 거래소/코인/날짜/카테고리별 파일 자동 생성
 - 로그 카테고리: SYSTEM(시작/종료/설정/에러), TRADE(주문/체결/청산), ASSET(잔고/수수료/펀딩), SIGNAL(전략/국면), MARKET(캔들/가격)
 - 로그 레벨: config.yaml `logging.level`로 설정 (CLI `--log-level`로 오버라이드 가능), `logging.base_dir`로 저장 경로 설정

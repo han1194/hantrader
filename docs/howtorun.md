@@ -102,6 +102,7 @@ python -m src.main backtest -e binance_futures -s BTC/USDT --capital 5000 --leve
 
 # 실제 테스트
 python -m src.main backtest -e binance_futures -s BTC/USDT --start 2026-01-01 --capital 100
+python -m src.main backtest -e binance_futures -s BTC/USDT --start 2026-04-01 --capital 100 --no-auto-collect
 ```
 
 - 리포트 출력: `data/backtest/` (텍스트, HTML 대시보드, 거래 내역 CSV)

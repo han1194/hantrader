@@ -131,7 +131,9 @@ git push usb main            # USB에 올리기 (USB 꽂은 상태)
 
     ```bash
     git status
-    git diff
+    git diff 
+       q — 종료 (가장 일반적)
+       Ctrl + C — 강제 종료
     ```
 
 2. **커밋 + 양쪽 원격 push**
