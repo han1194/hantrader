@@ -98,6 +98,10 @@ class StrategyConfig:
     break_lookback: int = 5              # 직전 고점/저점 조회 기간
     break_buffer_pct: float = 0.001      # 돌파 최소 여유 (0.1%, wick 노이즈 제거)
 
+    # V8 전략 파라미터 (name="bb_v8")
+    # 세 밴드 price 변화 기반 국면 판단 (상단/하단은 N봉 평균, 폭/중단은 직전봉 비교)
+    band_avg_lookback: int = 3           # 상/하단 평균 계산 기간 (캔들 수)
+
     def to_strategy_kwargs(
         self,
         *,
@@ -138,8 +142,8 @@ class StrategyConfig:
             kwargs["mtf_weight_lower"] = self.mtf_weight_lower
             kwargs["mtf_trend_threshold"] = self.mtf_trend_threshold
 
-        # V2 전략 파라미터 (bb_v2, bb_v2_mtf, bb_v3~v7는 V2 상속)
-        if self.name in ("bb_v2", "bb_v2_mtf", "bb_v3", "bb_v4", "bb_v5", "bb_v6", "bb_v7"):
+        # V2 전략 파라미터 (bb_v2, bb_v2_mtf, bb_v3~v8는 V2 상속)
+        if self.name in ("bb_v2", "bb_v2_mtf", "bb_v3", "bb_v4", "bb_v5", "bb_v6", "bb_v7", "bb_v8"):
             kwargs["min_bbw_for_sideways"] = self.min_bbw_for_sideways
             kwargs["min_entry_interval"] = self.min_entry_interval
 
@@ -171,6 +175,10 @@ class StrategyConfig:
             kwargs["break_lookback"] = self.break_lookback
             kwargs["break_buffer_pct"] = self.break_buffer_pct
             kwargs["hysteresis_candles"] = self.hysteresis_candles
+
+        # V8 전용 파라미터 (세 밴드 price 변화 기반 국면 판단)
+        if self.name == "bb_v8":
+            kwargs["band_avg_lookback"] = self.band_avg_lookback
 
         return kwargs
 
@@ -385,6 +393,7 @@ class AppConfig:
             width_expand_ratio=strat_raw.get("width_expand_ratio", 1.05),
             break_lookback=strat_raw.get("break_lookback", 5),
             break_buffer_pct=strat_raw.get("break_buffer_pct", 0.001),
+            band_avg_lookback=strat_raw.get("band_avg_lookback", 3),
         )
 
         # simple sections

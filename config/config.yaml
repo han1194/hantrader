@@ -74,15 +74,16 @@ storage:
     output_dir: "data/csv"
 
 # ─── BB 전략 설정 ───
-# name: "bb", "bb_mtf", "bb_v2", "bb_v2_mtf", "bb_v3", "bb_v4", "bb_v5", "bb_v6", "bb_v7"
+# name: "bb", "bb_mtf", "bb_v2", "bb_v2_mtf", "bb_v3", "bb_v4", "bb_v5", "bb_v6", "bb_v7", "bb_v8"
 # bb_v2/bb_v2_mtf: BBW 최소 기준 + 물타기 간격 제한 추가
 # bb_v3: V2 + BB% 극단 돌파 필터(A) + ADX OR 차단(B)
 # bb_v4: V2 + 국면 전환(trend→sideways) 쿨다운(C)
 # bb_v5: V2 + 국면 판단 hysteresis (trend→sideways 전환 시 N캔들 연속 조건 요구)
 # bb_v6: V2 + 밴드 기울기(상/중/하단 slope) 정렬 direction 보강 + Squeeze 감지 시 sideways 강제
 # bb_v7: V2 + 가격-밴드 돌파 기반 국면 판단(BB폭 확장 AND 종가가 직전 N봉 고점/저점 돌파) + V5 hysteresis
+# bb_v8: V2 + 세 밴드 price 변화 기반 국면 판단 (상단 상승 AND 종가 상단 돌파 AND 하단 하락 AND 폭 확장 AND 중단 상승 → TREND_UP, 외에는 SIDEWAYS)
 strategy:
-  name: "bb"                      # "bb" / "bb_mtf" / "bb_v2" / "bb_v2_mtf" / "bb_v3" / "bb_v4" / "bb_v5" / "bb_v6" / "bb_v7"
+  name: "bb_mtf"              # "bb" / "bb_mtf" / "bb_v2" / "bb_v2_mtf" / "bb_v3" / "bb_v4" / "bb_v5" / "bb_v6" / "bb_v7" / "bb_v8"
   # Bollinger Bands 기본
   bb_period: 20
   bb_std: 2.0
@@ -142,6 +143,16 @@ strategy:
   width_expand_ratio: 1.05      # 현재 폭이 N봉 평균의 이 배수 초과면 "확장"
   break_lookback: 5             # 직전 고점/저점 조회 기간 (캔들 수)
   break_buffer_pct: 0.001       # 돌파 최소 여유 (0.001=0.1%, wick 노이즈 제거)
+  # ─── bb_v8 전용 파라미터 ───
+  # 세 밴드 price 변화 기반 국면 판단 (후행 지표 완전 제거, 밴드 모양만으로 판단)
+  #   TREND_UP =
+  #     (bb_upper > 직전 N봉 bb_upper 평균) AND
+  #     (close > bb_upper) AND
+  #     (bb_lower < 직전 N봉 bb_lower 평균) AND
+  #     (현재 폭 > 직전봉 폭) AND
+  #     (bb_middle > 직전봉 bb_middle)
+  #   그 외 = SIDEWAYS (TREND_DOWN은 아직 미정의)
+  band_avg_lookback: 3          # 상/하단 평균 계산 기간 (캔들 수)
 
 # ─── 백테스트 설정 ───
 backtest:
@@ -186,9 +197,9 @@ trader:
   max_margin_per_entry: 5       # margin_pct=0일 때 고정 마진 상한 (USDT)
   # 레버리지 범위 (BB width에 따라 동적 조정)
   leverage_max: 50
-  leverage_min: 50
+  leverage_min: 30
   # 횡보장 레버리지 상한 (반전매매 시 강제청산 방지)
-  sideways_leverage_max: 15
+  sideways_leverage_max: 20
   # 마진 모드 (isolated: 격리, cross: 교차)
   margin_mode: "cross"
   # 자본 모드:
@@ -228,9 +239,9 @@ trader:
       trade_quantity: 10.0
     SOL/USDT:
       timeframe: "15m"
-      leverage_max: 20
+      leverage_max: 30
       leverage_min: 20
-      sideways_leverage_max: 10
+      sideways_leverage_max: 15
       trade_quantity: 0.1
 
 # ─── 로깅 설정 ───
