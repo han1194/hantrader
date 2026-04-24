@@ -1,8 +1,12 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import TYPE_CHECKING, Optional
 
 import pandas as pd
+
+if TYPE_CHECKING:
+    from src.utils.log_manager import HanLogger
 
 
 class SignalType(Enum):
@@ -45,6 +49,18 @@ class BaseStrategy(ABC):
     def __init__(self, name: str, timeframe: str = "1h"):
         self.name = name
         self.timeframe = timeframe
+        # 거래소/심볼/모드 바인딩된 로거 (선택). 주입 시 전략 내부 로그가
+        # {exchange}/{symbol}/{날짜}/{mode}/{category}.log 경로로 라우팅된다.
+        self._log_ctx: Optional["HanLogger"] = None
+
+    def set_log_context(self, log: "HanLogger") -> None:
+        """거래소/심볼/모드 바인딩된 HanLogger 를 주입한다.
+
+        전략은 일반적으로 exchange-agnostic 하지만, 생성 후 엔진이 자신의
+        `self.log` 를 이 메서드로 넘겨주면 전략 내부 로그를 signal.log 등
+        카테고리 파일로 분리 기록할 수 있다.
+        """
+        self._log_ctx = log
 
     @abstractmethod
     def generate_signals(self, df: pd.DataFrame) -> list[Signal]:

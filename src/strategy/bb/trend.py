@@ -64,12 +64,20 @@ def generate_trend_signals(
     peak_price: float,
     trough_price: float,
     logger: logging.Logger,
+    allow_counter_trend: bool = True,
 ) -> list[Signal]:
     """추세장에서 추세추종/반전매매 시그널을 생성한다.
 
     현재 포지션 방향과 충돌하는 시그널은 생성하지 않는다.
     트레일링 스톱: PnL이 trailing_start_pct 이상이면 활성화,
     고점/저점 대비 trailing_stop_pct 되돌리면 익절 청산.
+
+    Args:
+        allow_counter_trend: False이면 추세장에서 역방향(반대 추세) 진입을
+            생성하지 않는다. 즉 BB 상단은 `is_uptrend & confirmed`일 때만
+            Long 추세추종이, BB 하단은 `!is_uptrend & confirmed`일 때만
+            Short 추세추종이 발생한다. 나머지는 관망. 물타기 후 손절/
+            트레일링/익절 로직은 플래그와 무관하게 그대로 동작한다.
     """
     signals: list[Signal] = []
 
@@ -176,7 +184,7 @@ def generate_trend_signals(
                     logger.debug(f"[추세] BB상단 Long 미진입: Short 포지션 보유 중 (S{short_step}단계)")
                 elif long_step >= 3:
                     logger.debug(f"[추세] BB상단 Long 미진입: 최대 단계 도달 (L{long_step}단계)")
-        else:
+        elif allow_counter_trend:
             # 하락 추세 → Short 진입/추가 (long 보유 중이면 무시)
             if long_step == 0:
                 for level in levels.SHORT_ENTRY_LEVELS:
@@ -195,6 +203,12 @@ def generate_trend_signals(
                 logger.debug(f"[추세] BB상단 Short 미진입: Long 포지션 보유 중 (L{long_step}단계)")
             if not trend_confirmed:
                 logger.debug("[추세] BB상단 미확인: 추세확인 실패 (MACD/RSI/Vol)")
+        else:
+            # allow_counter_trend=False: 상승 추세 미확인 시 역방향 Short 진입 차단
+            logger.debug(
+                f"[추세] BB상단 관망 | is_uptrend={is_uptrend} confirmed={trend_confirmed} "
+                f"(counter-trend 차단)"
+            )
         return signals
 
     # --- BB 하단 도달 ---
@@ -216,7 +230,7 @@ def generate_trend_signals(
                     logger.debug(f"[추세] BB하단 Short 미진입: Long 포지션 보유 중 (L{long_step}단계)")
                 elif short_step >= 3:
                     logger.debug(f"[추세] BB하단 Short 미진입: 최대 단계 도달 (S{short_step}단계)")
-        else:
+        elif allow_counter_trend:
             # 상승 추세 → Long 진입/추가 (short 보유 중이면 무시)
             if short_step == 0:
                 for level in levels.LONG_ENTRY_LEVELS:
@@ -235,6 +249,12 @@ def generate_trend_signals(
                 logger.debug(f"[추세] BB하단 Long 미진입: Short 포지션 보유 중 (S{short_step}단계)")
             if not trend_confirmed:
                 logger.debug("[추세] BB하단 미확인: 추세확인 실패 (MACD/RSI/Vol)")
+        else:
+            # allow_counter_trend=False: 하락 추세 미확인 시 역방향 Long 진입 차단
+            logger.debug(
+                f"[추세] BB하단 관망 | is_uptrend={is_uptrend} confirmed={trend_confirmed} "
+                f"(counter-trend 차단)"
+            )
         return signals
 
     # BB 중간대 → 관망

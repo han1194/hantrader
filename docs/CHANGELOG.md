@@ -1,5 +1,205 @@
 # HanTrader 변경 이력
 
+## 2026-04-24 BB V9 에 V4 쿨다운 상속 (whipsaw 차단)
+
+### 배경
+
+사용자가 실제 백테스트(SOL/USDT 2026-04-01~15 1h)의 signal.log 에서
+"2026-04-09 08:00 횡보 반전매수 2차" 체결을 확인하고 의문 제기. V9 이력 분석:
+
+```text
+04-09 03:00  trend_down 진입      (score A/B/C/D = 0/0/-1/-1)
+04-09 04:00~05:00  hysteresis 유지 (final=trend_down)
+04-09 06:00  sideways 복귀        (3캔들 연속 sideways 조건 충족)
+04-09 07:00  sideways, D=-1
+04-09 08:00  **sideways, C=-1, bbp≈0.07 → 횡보 반전매수 2차 체결**
+04-09 09:00  trend_down 재진입    (score -2)
+04-09 10:00  trend_down 지속
+```
+
+즉 하락 추세 중의 "6시간 숨고르기"가 V9 hysteresis 3캔들 조건을 충족시켜
+sideways 로 복귀하자마자 BB 하단 근처(bbp≈0.07)에서 Long 반전매수가 나갔고,
+다음 캔들에서 추세가 재개되어 손실로 이어지는 whipsaw 패턴.
+
+### 해결
+
+V4 에 이미 동일한 패턴을 막기 위한 `cooldown_candles` (trend→sideways
+전환 직후 N캔들 횡보 신규 진입 차단) 로직이 있으므로 **V9의 상속 부모를
+V2 에서 V4 로 변경**. `detect_regime`/`_trend_signals` 는 V9 가 그대로
+오버라이드하므로 국면 판단과 역추세 차단 로직은 유지되고, V4 의
+`generate_signals`(cooldown 추적)가 MRO 체인으로 자동 적용된다.
+
+### 변경
+
+- **[src/strategy/bb/v9.py](src/strategy/bb/v9.py)**: 클래스 선언
+  `BBV9Strategy(BBV2Strategy)` → `BBV9Strategy(BBV4Strategy)`.
+  import 경로 `.v2` → `.v4`. docstring 에 쿨다운 섹션 추가.
+- **[src/config.py](src/config.py)**: `to_strategy_kwargs` 의 `bb_v9`
+  블록에 `cooldown_candles` 전달 추가. (`cooldown_candles` 필드는
+  `StrategyConfig` 에 V4 용으로 이미 존재, 기본 5)
+
+### 검증
+
+실제 SOL/USDT 1h DB 로 2026-03-15 ~ 2026-04-14 구간 백테스트
+(`python -m src.main backtest ...`와 동일 로직):
+
+```text
+cooldown=0 : total=113, 횡보반전=19, 추세추종=53, 04-09 08:00 = "횡보 반전매수 2차" ← 기존 문제
+cooldown=3 : total=106, 횡보반전=12, 추세추종=55, 04-09 08:00 = (없음)  ← 차단 OK
+cooldown=5 : total=103, 횡보반전= 9, 추세추종=57, 04-09 08:00 = (없음)  ← 기본값
+```
+
+횡보 반전매매 진입 수가 19→9 로 53% 감소, 추세추종 진입은 소폭 증가
+(53→57) — 추세 중 잘못된 반전 진입이 제거되고 추세 복귀 시 기회는 유지.
+
+## 2026-04-24 BB V9 추세장 역추세 진입 차단 (Option A)
+
+### 배경
+
+사용자가 signal.log 에서 `추세장 반전매수 / 반전매도` 체결을 확인하고 설계
+의문을 제기: "추세장에서 왜 반전매수를 하는지? 언제 추세가 바뀔줄 알고?
+반전매매는 횡보장에서만 하는 거 아닌가?"
+
+실제 [src/strategy/bb/trend.py](src/strategy/bb/trend.py) 의 구조는:
+
+- BB 상단 도달 시: `is_uptrend and trend_confirmed` 면 Long 추세추종, **그 외에는 Short 역방향 진입**
+- BB 하단 도달 시: `not is_uptrend and trend_confirmed` 면 Short 추세추종, **그 외에는 Long 역방향 진입**
+
+즉 추세가 확인되지 않은 상황 또는 반대 추세 상황에서도 BB 경계에서 반전을
+시도하는 구조 → 정석적 투자 원칙(추세장은 추세추종 전용)에 어긋나며
+특히 하락 추세에서 BB 하단 Long 진입은 "떨어지는 칼날 잡기".
+
+### 변경
+
+- **`src/strategy/bb/trend.py`**: `generate_trend_signals` 에 `allow_counter_trend: bool = True`
+  파라미터 추가. 기존 전략(V1~V8)은 기본값 `True` 로 호출되어 **동작 변경 없음**.
+- **`src/strategy/bb/v9.py`**: `_trend_signals` 를 오버라이드하여 `allow_counter_trend=False`
+  로 호출. BB 상단에서 `is_uptrend and trend_confirmed` 일 때만 Long,
+  BB 하단에서 `not is_uptrend and trend_confirmed` 일 때만 Short.
+  그 외에는 관망 (`[추세] BB상단/하단 관망 | ... (counter-trend 차단)` 로깅).
+- 물타기 후 손절/트레일링/익절 로직은 플래그 무관하게 그대로 동작.
+
+### 스모크 테스트
+
+합성 추세·횡보 혼합 500봉 데이터로 V2/V9 비교:
+
+```text
+BBV2: total=71 signals, TREND_reverse_long=3  (기존: 역추세 진입 발생)
+BBV9: total=58 signals, TREND_reverse_long=0  (V9: 완전 차단)
+```
+
+나머지 추세추종/횡보반전/손절/익절 시그널은 정상 동작.
+
+## 2026-04-24 전략 로그를 signal.log 로 라우팅
+
+전략 내부 로그(예: BB V9 의 `V9 국면/전환/score`)가 `system/{날짜}.log` 로만 쌓이고
+`{exchange}/{symbol}/{날짜}/{mode}/signal.log` 에는 생기지 않는 문제를 수정.
+
+### 원인
+
+전략은 `setup_logger()` 로 만든 **exchange/symbol 미지정 HanLogger** 만 사용했고,
+`LogManager.log()` 의 `if exchange and symbol:` 가드에 걸려 거래소별 카테고리
+파일에 도달하지 못함. 백테스트 엔진/라이브 엔진도 `log.signal()` 을 호출하지
+않으므로 signal.log 핸들러가 생성되지 않았음.
+
+### 변경
+
+- **`BaseStrategy`**: `_log_ctx: HanLogger | None` 필드 + `set_log_context(log)` 메서드
+  추가. 전략 내부에서 `self._log_ctx.signal(...)` 로 라우팅할 수 있게 함
+  (TYPE_CHECKING 으로 circular import 방지).
+- **`BBV9Strategy`**: `logger.info/debug` 호출을 `_log_info/_log_debug` 헬퍼로 교체.
+  헬퍼는 `_log_ctx` 가 있으면 `.signal()` 카테고리로, 없으면 기본 모듈 logger
+  로 폴백. 기존 모듈 logger 로 쓰는 다른 전략은 영향 없음.
+- **`main._create_strategy`**: `exchange`/`symbol`/`mode` 키워드 인자 추가.
+  주어지면 `LogManager.instance().bind(...)` 결과를 `set_log_context` 로 주입.
+- **`cmd_strategy` / `cmd_backtest`**: 전략 생성 시 exchange/symbol/mode(backtest)
+  전달.
+- **`LiveEngineBase.__init__`**: `self.log` 생성 직후 `self.strategy.set_log_context(self.log)`
+  호출 (시뮬레이터/트레이더에도 자동 적용).
+
+### 결과
+
+합성 OHLCV 스모크 테스트에서 생성되는 로그 파일:
+
+```text
+binance_futures/SOL_USDT/2026-04-24/backtest/
+  all.log       ← DEBUG+ 전체
+  signal.log    ← V9 국면/전환/score (신규)
+system/
+  2026-04-24.log  ← 전략 초기화 등 SYSTEM 카테고리
+```
+
+## 2026-04-24 BB V9 디버그 로그 보강
+
+`detect_regime` 에서 **국면 전환 시점**을 INFO 로그로, **캔들별 A/B/C/D 점수 +
+total + raw/final + close + BB 밴드 + ATR** 을 DEBUG 로그로 남기도록 추가.
+특정 오판 캔들의 규칙별 기여도를 tail 로그 한 줄로 확인 가능.
+
+- INFO `V9 전환 | {ts} | {prev} → {new} | A=+0 B=+0 C=+1 D=+1 total=+2 raw=...`
+- DEBUG `V9 score | {ts} | A=... B=... C=... D=... total=... → raw=... final=...`
+
+DEBUG 로그는 `LogManager._level <= DEBUG` 를 사전 체크해서 루프/포맷팅 비용을
+회피(CLI `--log-level DEBUG` 또는 `logging.level: DEBUG`일 때만 활성).
+
+## 2026-04-24 BB V9 전략 추가
+
+4개 독립 규칙 투표 기반 국면 판단 전략. 특정 백테스트 차트
+(`SOL/USDT 2026-04-01~15 1h`)에서 드러난 오판 케이스 — (1) 10% 급락 구간을
+sideways로 처리, (2) 단일 캔들 상단 스파이크를 trend_up으로 승격 — 두 가지를
+함께 걸러낼 수 있도록 서로 다른 축의 규칙을 조합한다.
+
+### 4개 규칙 (각 -1/0/+1 반환)
+
+- **A. 캔들 몸통 누적 방향성 (ATR 정규화)**: 최근 `body_window`봉의
+  `sign(close-open) * |close-open| / ATR` 합이 `±body_threshold`를 넘으면 발동.
+  연속 동색 큰 몸통 구간(예: 10% 급락 초반)을 즉시 감지.
+- **B. BB 외부 체류 연속 캔들 수**: `close > bb_upper`(또는 하단 이탈)가
+  `out_streak_min`봉 이상 연속될 때만 발동. 1캔들 스파이크는 streak 부족으로
+  0점 처리되어 페이크 브레이크 필터링.
+- **C. 스윙 구조 (HH-HL / LH-LL)**: 최근 `swing_window`봉의 high/low가
+  그 이전 `swing_window`봉보다 모두 상승 → +1, 모두 하락 → -1.
+- **D. 중단선 대비 종가 위치 지속성**: `mid_persist_window`봉 연속 동일 부호
+  AND 괴리율이 확장되는 경우만 발동. 단순 중단 돌파를 추세로 오판하지 않음.
+
+### 파이프라인
+
+합산 score가 `±vote_threshold` (기본 2) 이상이면 raw TREND_*, 그 외 SIDEWAYS →
+V5/V7 공용 `apply_regime_hysteresis` 적용 (sideways→trend 즉시, trend→sideways는
+`hysteresis_candles` 연속 요구, trend_up↔trend_down 즉시 반전).
+
+### 추가/수정 파일
+
+- **신규** `src/strategy/bb/v9.py` — `BBV9Strategy` 본체. `BBV2Strategy` 상속,
+  `compute_indicators`는 ATR 컬럼 추가만, `detect_regime`만 오버라이드.
+- **신규** `src/strategy/bb_v9_strategy.py` — 하위 호환 re-export shim.
+- **수정** `src/strategy/bb/__init__.py`, `src/strategy/__init__.py` — V9 export.
+- **수정** `src/config.py` — `StrategyConfig`에 V9 파라미터 8개 추가
+  (`atr_window`, `body_window`, `body_threshold`, `out_streak_min`,
+  `swing_window`, `mid_persist_window`, `vote_threshold`는 V9 전용,
+  `hysteresis_candles`는 V5/V7과 공유). `to_strategy_kwargs`와 `from_yaml` 양쪽
+  업데이트.
+- **수정** `CLAUDE.md` — 전략 목록에 V8/V9 반영 (V8 누락분도 이번에 보강).
+
+### 사용 방법
+
+```yaml
+strategy:
+  name: bb_v9
+  # V2 공용 파라미터는 그대로 적용됨
+  # 기본값이 합리적이므로 명시 없이도 동작
+```
+
+```bash
+python -m src.main backtest -e binance_futures -s SOL/USDT \
+  --start 2026-04-01 --end 2026-04-15 --capital 1000 --no-auto-collect
+```
+
+### 주의
+
+이 전략은 특정 차트 분석에서 파생된 설계로, **과적합 위험**이 있다. 원 차트
+구간 외의 다른 기간/심볼에 대해 regime 정합성 검증(사람 라벨 vs 규칙 판정 일치율)
+을 별도로 수행할 것을 권장.
+
 ## 2026-04-23 전략 모듈 리팩토링 (동작 변경 없음)
 
 9개로 부풀어 있던 `src/strategy/bb_*.py` 계열 파일과 799줄짜리 `bb_strategy.py`를

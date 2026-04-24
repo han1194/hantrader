@@ -102,6 +102,16 @@ class StrategyConfig:
     # 세 밴드 price 변화 기반 국면 판단 (상단/하단은 N봉 평균, 폭/중단은 직전봉 비교)
     band_avg_lookback: int = 3           # 상/하단 평균 계산 기간 (캔들 수)
 
+    # V9 전략 파라미터 (name="bb_v9")
+    # 4개 규칙 투표 기반 국면 판단 (몸통 누적 / BB 외부 체류 / 스윙구조 / 중단 괴리)
+    atr_window: int = 14                 # ATR 계산 기간 (규칙 A 정규화용)
+    body_window: int = 5                 # 캔들 몸통 누적 윈도우 (규칙 A)
+    body_threshold: float = 2.0          # 누적합 ≥ 이 값 → +1, ≤ -값 → -1
+    out_streak_min: int = 2              # BB 외부 체류 최소 연속 캔들 수 (규칙 B)
+    swing_window: int = 5                # 최근/직전 스윙 비교 윈도우 (규칙 C)
+    mid_persist_window: int = 5          # 중단선 대비 연속 동일부호 윈도우 (규칙 D)
+    vote_threshold: int = 2              # 합산 score ≥ 이 값 → TREND_UP, ≤ -값 → TREND_DOWN
+
     def to_strategy_kwargs(
         self,
         *,
@@ -142,8 +152,8 @@ class StrategyConfig:
             kwargs["mtf_weight_lower"] = self.mtf_weight_lower
             kwargs["mtf_trend_threshold"] = self.mtf_trend_threshold
 
-        # V2 전략 파라미터 (bb_v2, bb_v2_mtf, bb_v3~v8는 V2 상속)
-        if self.name in ("bb_v2", "bb_v2_mtf", "bb_v3", "bb_v4", "bb_v5", "bb_v6", "bb_v7", "bb_v8"):
+        # V2 전략 파라미터 (bb_v2, bb_v2_mtf, bb_v3~v9는 V2 상속)
+        if self.name in ("bb_v2", "bb_v2_mtf", "bb_v3", "bb_v4", "bb_v5", "bb_v6", "bb_v7", "bb_v8", "bb_v9"):
             kwargs["min_bbw_for_sideways"] = self.min_bbw_for_sideways
             kwargs["min_entry_interval"] = self.min_entry_interval
 
@@ -179,6 +189,19 @@ class StrategyConfig:
         # V8 전용 파라미터 (세 밴드 price 변화 기반 국면 판단)
         if self.name == "bb_v8":
             kwargs["band_avg_lookback"] = self.band_avg_lookback
+
+        # V9 전용 파라미터 (4개 규칙 투표 + hysteresis + V4 상속 쿨다운)
+        if self.name == "bb_v9":
+            kwargs["atr_window"] = self.atr_window
+            kwargs["body_window"] = self.body_window
+            kwargs["body_threshold"] = self.body_threshold
+            kwargs["out_streak_min"] = self.out_streak_min
+            kwargs["swing_window"] = self.swing_window
+            kwargs["mid_persist_window"] = self.mid_persist_window
+            kwargs["vote_threshold"] = self.vote_threshold
+            kwargs["hysteresis_candles"] = self.hysteresis_candles
+            # V4로부터 상속받은 국면 전환 쿨다운 (trend→sideways 직후 횡보 신규진입 차단)
+            kwargs["cooldown_candles"] = self.cooldown_candles
 
         return kwargs
 
@@ -394,6 +417,13 @@ class AppConfig:
             break_lookback=strat_raw.get("break_lookback", 5),
             break_buffer_pct=strat_raw.get("break_buffer_pct", 0.001),
             band_avg_lookback=strat_raw.get("band_avg_lookback", 3),
+            atr_window=strat_raw.get("atr_window", 14),
+            body_window=strat_raw.get("body_window", 5),
+            body_threshold=strat_raw.get("body_threshold", 2.0),
+            out_streak_min=strat_raw.get("out_streak_min", 2),
+            swing_window=strat_raw.get("swing_window", 5),
+            mid_persist_window=strat_raw.get("mid_persist_window", 5),
+            vote_threshold=strat_raw.get("vote_threshold", 2),
         )
 
         # simple sections

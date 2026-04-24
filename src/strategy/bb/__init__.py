@@ -21,6 +21,7 @@ from .v5 import BBV5Strategy
 from .v6 import BBV6Strategy
 from .v7 import BBV7Strategy
 from .v8 import BBV8Strategy
+from .v9 import BBV9Strategy
 
 __all__ = [
     "BBStrategy",
@@ -33,6 +34,7 @@ __all__ = [
     "BBV6Strategy",
     "BBV7Strategy",
     "BBV8Strategy",
+    "BBV9Strategy",
     "LONG_ENTRY_LEVELS",
     "SHORT_ENTRY_LEVELS",
     "LONG_STOP_LEVELS",

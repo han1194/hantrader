@@ -82,10 +82,13 @@ class LiveEngineBase(ABC):
         # 시작 시각
         self._start_time = datetime.now(KST)
 
-        # 카테고리 로거 (거래소/심볼 바인딩 — 콘솔 + 파일 동시 출력)
         # 카테고리 로거 (거래소/심볼/모드 바인딩 — 콘솔 + 파일 동시 출력)
         # _log_prefix: 서브클래스에서 정의 ("sim" 또는 "trade")
         self.log: HanLogger = LogManager.instance().bind(exchange_name, symbol, mode=self._log_prefix)
+
+        # 전략에 바인딩된 로거 주입 — 전략 내부 로그가 signal.log로 라우팅되게 함
+        if hasattr(self.strategy, "set_log_context"):
+            self.strategy.set_log_context(self.log)
 
     # ------------------------------------------------------------------
     # 메인 루프

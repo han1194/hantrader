@@ -83,7 +83,7 @@ storage:
 # bb_v7: V2 + 가격-밴드 돌파 기반 국면 판단(BB폭 확장 AND 종가가 직전 N봉 고점/저점 돌파) + V5 hysteresis
 # bb_v8: V2 + 세 밴드 price 변화 기반 국면 판단 (상단 상승 AND 종가 상단 돌파 AND 하단 하락 AND 폭 확장 AND 중단 상승 → TREND_UP, 외에는 SIDEWAYS)
 strategy:
-  name: "bb_mtf"              # "bb" / "bb_mtf" / "bb_v2" / "bb_v2_mtf" / "bb_v3" / "bb_v4" / "bb_v5" / "bb_v6" / "bb_v7" / "bb_v8"
+  name: "bb_v9"              # "bb" / "bb_mtf" / "bb_v2" / "bb_v2_mtf" / "bb_v3" / "bb_v4" / "bb_v5" / "bb_v6" / "bb_v7" / "bb_v8"
   # Bollinger Bands 기본
   bb_period: 20
   bb_std: 2.0

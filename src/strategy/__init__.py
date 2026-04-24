@@ -9,11 +9,12 @@ from .bb_v5_strategy import BBV5Strategy
 from .bb_v6_strategy import BBV6Strategy
 from .bb_v7_strategy import BBV7Strategy
 from .bb_v8_strategy import BBV8Strategy
+from .bb_v9_strategy import BBV9Strategy
 
 __all__ = [
     "BaseStrategy", "Signal", "SignalType", "MarketRegime",
     "BBStrategy", "BBMTFStrategy",
     "BBV2Strategy", "BBV2MTFStrategy",
     "BBV3Strategy", "BBV4Strategy", "BBV5Strategy", "BBV6Strategy", "BBV7Strategy",
-    "BBV8Strategy",
+    "BBV8Strategy", "BBV9Strategy",
 ]

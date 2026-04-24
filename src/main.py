@@ -55,9 +55,26 @@ def _normalize_symbols(raw: str, exchange: str = "") -> list[str]:
     return [_normalize_symbol(s, exchange) for s in raw.split(",")]
 
 
-def _create_strategy(cfg: AppConfig, strategy_kwargs: dict):
-    """설정의 전략 이름에 따라 전략 인스턴스를 생성한다."""
-    return create_strategy(cfg.strategy.name, **strategy_kwargs)
+def _create_strategy(
+    cfg: AppConfig,
+    strategy_kwargs: dict,
+    *,
+    exchange: str = "",
+    symbol: str = "",
+    mode: str = "",
+):
+    """설정의 전략 이름에 따라 전략 인스턴스를 생성한다.
+
+    `exchange`/`symbol` 이 주어지면 전략에 바인딩된 `HanLogger` 를 주입하여
+    전략 내부 로그가 `{exchange}/{symbol}/{날짜}/{mode}/signal.log` 경로로
+    쓰이게 한다.
+    """
+    strat = create_strategy(cfg.strategy.name, **strategy_kwargs)
+    if exchange and symbol:
+        strat.set_log_context(
+            LogManager.instance().bind(exchange, symbol, mode=mode)
+        )
+    return strat
 
 
 def _prepare_mtf_data(strategy, df, db, exchange, symbol, cfg, start=None, end=None):
@@ -133,10 +150,12 @@ def cmd_strategy(args, cfg: AppConfig):
         leverage_min=leverage_min,
         sideways_leverage_max=bt.sideways_leverage_max,
     )
-    strategy = _create_strategy(cfg, strategy_kwargs)
 
     exchange = args.exchange
     symbol = _normalize_symbol(args.symbol, exchange)
+    strategy = _create_strategy(
+        cfg, strategy_kwargs, exchange=exchange, symbol=symbol,
+    )
 
     log = LogManager.instance().bind()
     log.info(f"전략 실행: {exchange}/{symbol} ({strategy.timeframe})")
@@ -238,7 +257,10 @@ def cmd_backtest(args, cfg: AppConfig):
             leverage_min=leverage_min,
             sideways_leverage_max=bt.sideways_leverage_max,
         )
-        strategy = _create_strategy(cfg, strategy_kwargs)
+        strategy = _create_strategy(
+            cfg, strategy_kwargs,
+            exchange=exchange, symbol=symbol, mode="backtest",
+        )
         _prepare_mtf_data(
             strategy, df, db, exchange, symbol, cfg,
             start=load_start, end=args.end,

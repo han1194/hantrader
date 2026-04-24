@@ -89,7 +89,7 @@ hantrader/
 - 중간 동기화: `sync_timeframe` (기본 15m) 캔들마다 거래소와 포지션/잔고 동기화 — liquidation, 외부 청산 등 메인 TF 사이 변화 감지
 - 시작/종료 시에도 거래소 동기화 수행 (잔고, 포지션, 펀딩 수수료)
 - Emergency stop: 진입/추매마다 거래소에 STOP_MARKET 주문 등록 (서버사이드 비상 손절, 마진 콜 방지)
-- 전략은 레지스트리 기반 (`create_strategy(name, **kwargs)`) — config.yaml `strategy.name`으로 선택 ("bb", "bb_mtf", "bb_v2", "bb_v2_mtf", "bb_v3", "bb_v4", "bb_v5", "bb_v6", "bb_v7")
+- 전략은 레지스트리 기반 (`create_strategy(name, **kwargs)`) — config.yaml `strategy.name`으로 선택 ("bb", "bb_mtf", "bb_v2", "bb_v2_mtf", "bb_v3", "bb_v4", "bb_v5", "bb_v6", "bb_v7", "bb_v8", "bb_v9")
 - BB MTF 전략: 기준 TF 위/아래 인접 TF 국면을 가중 투표로 합산, 허위 국면 전환 필터링 (예: 1h → 30m/2h 참고)
 - BB V2 전략: BBW 최소 기준(`min_bbw_for_sideways`) + 추세 물타기 최소 간격(`min_entry_interval`) 추가, 기존 BB 전략 상속
 - BB V2 MTF 전략: BB V2 + MTF 국면 판단 결합
@@ -98,6 +98,8 @@ hantrader/
 - BB V5 전략: BB V2 상속 + Regime hysteresis(`hysteresis_candles`, 기본 3) — trend→sideways 전환을 N캔들 연속 sideways 조건 만족 시에만 허용 (추세의 일시 정지를 추세 종료로 오판 방지). sideways→trend 및 trend_up↔trend_down은 즉시 허용
 - BB V6 전략: BB V2 상속 + 밴드 기울기(상/중/하단 slope) 정렬을 direction에 가산(`slope_lookback`/`slope_threshold`/`slope_weight`, 기본 3/0.001/0.5, 세 밴드 모두 정렬 시 ±1.5) + Squeeze 감지(`squeeze_bbw_ratio`, 기본 0.7; BBW가 rolling 평균의 해당 비율 미만이면 squeeze) 시 sideways 강제(`block_entry_on_squeeze=true`) — 후행 지표 의존을 완화하여 밴드 자체 움직임으로 국면 방향성 보강
 - BB V7 전략: BB V2 상속 + **가격-밴드 돌파 기반 국면 판단** + V5 방식 hysteresis — ADX/EMA/MACD/DI 등 후행 지표 의존을 완전히 제거. 추세 상승 = (BB 폭 > 직전 N봉 평균 폭 × `width_expand_ratio`) AND (종가 > 직전 N봉 close 최고가 × (1 + `break_buffer_pct`)). 추세 하락은 하단 대칭. 그 외 횡보. 기본값 `width_lookback=5`/`width_expand_ratio=1.05`/`break_lookback=5`/`break_buffer_pct=0.001`/`hysteresis_candles=3`. V6의 squeeze 강제 sideways가 하락 추세 중 BB 수축을 횡보로 오판하는 문제 해결
+- BB V8 전략: BB V2 상속 + 세 밴드 price 변화 조합 기반 국면 판단 — 다섯 조건 AND로 TREND_UP만 판정(그 외 SIDEWAYS): ① bb_upper > 직전 `band_avg_lookback` 봉 평균, ② close > bb_upper, ③ bb_lower < 직전 N봉 평균, ④ 폭 확장, ⑤ bb_middle 상승. TREND_DOWN은 미정의. 기본 `band_avg_lookback=3`
+- BB V9 전략: **BB V4 상속** + **4개 독립 규칙 투표 기반 국면 판단** + V5 방식 hysteresis + **추세장 역추세 진입 차단(Option A)** + **V4 쿨다운** — 특정 백테스트 차트에서 드러난 오판 패턴(급락을 sideways 처리 / 1캔들 스파이크를 trend로 승격 / hysteresis 해제 직후 whipsaw)을 다층으로 해결. (A) 캔들 몸통 누적 방향성(`body_window`봉 sign(close-open)·|close-open|/ATR 합 ≥ `body_threshold`), (B) BB 외부 체류 연속 캔들 수(≥ `out_streak_min`봉 연속이면 추세), (C) 스윙 구조(최근 `swing_window`봉 vs 이전 `swing_window`봉의 high/low 모두 상승=HH+HL → +1, 모두 하락=LH+LL → -1), (D) 중단선 대비 종가 위치의 지속성(`mid_persist_window`봉 연속 동일부호 AND 괴리율 확장). 각 규칙이 -1/0/+1 반환 → 합산 `vote_threshold` 이상이면 TREND. 추가로 `_trend_signals`를 오버라이드하여 `generate_trend_signals(..., allow_counter_trend=False)` 로 호출 — 추세장에서는 추세추종 방향 진입만 허용(BB 상단=확인된 UP에서만 Long, BB 하단=확인된 DOWN에서만 Short). V4 상속으로 trend→sideways 전환 직후 `cooldown_candles` (기본 5) 동안 횡보 신규 진입 차단 — hysteresis 해제 직후 추세 재개로 인한 whipsaw 방지 (예: SOL 2026-04-09 08:00 "횡보 반전매수 2차"가 09:00 trend_down 재진입으로 손실로 이어지던 케이스 차단). 물타기 후 손절/트레일링/익절 로직은 유지. 기본값 `atr_window=14`/`body_window=5`/`body_threshold=2.0`/`out_streak_min=2`/`swing_window=5`/`mid_persist_window=5`/`vote_threshold=2`/`hysteresis_candles=3`/`cooldown_candles=5`
 - 매매 기록 DB 저장: 모드별로 3개 테이블에 분리 저장 — 실거래=`trades`, 백테스트=`backtest_trades`, 시뮬레이터=`simulator_trades` (모두 동일 스키마)
 - `DatabaseStorage.TRADE_TABLES` dict로 모드→테이블 매핑, `save_trade(..., mode=...)` / `load_trades(..., mode=...)` / `clear_trades(exchange, symbol, mode, timeframe=...)` 제공
 - `BacktestEngine`은 `db`/`save_mode`/`timeframe` 인자로 DB 저장 활성화 (main.py가 `db`, `save_mode="backtest"` 주입, 실행 전 이전 결과 `clear_trades`)
@@ -122,6 +124,8 @@ hantrader/
 - [x] BB V5 전략 (bb_v5) — V2 + Regime hysteresis, 추세 일시 정지를 추세 종료로 오판하지 않도록 trend→sideways 전환에 N캔들 연속 조건 요구
 - [x] BB V6 전략 (bb_v6) — V2 + 밴드 기울기(상/중/하단 slope) direction 보강(±1.5) + Squeeze 감지 시 sideways 강제, 후행 지표 의존 완화로 국면 방향성 판단 개선
 - [x] BB V7 전략 (bb_v7) — V2 + 가격-밴드 돌파 기반 국면 판단(BB폭 확장 AND 종가가 직전 N봉 고점/저점 돌파) + V5 hysteresis. 후행 지표 의존 제거로 추세 진입/종료 지연 해소, V6의 squeeze 강제 sideways 오판 해결
+- [x] BB V8 전략 (bb_v8) — V2 + 세 밴드 price 변화 조합 기반 TREND_UP 판정 (상단/중단/하단·폭·돌파 다섯 조건 AND)
+- [x] BB V9 전략 (bb_v9) — V4 상속 + 4개 독립 규칙 투표(몸통 누적 방향성·BB 외부 체류·스윙구조·중단 괴리 지속성) + V5 hysteresis + 추세장 역추세 진입 차단(Option A) + V4 쿨다운. 급락/급등 신속 감지 + 1캔들 스파이크 오판 방지 + 추세장 칼날 잡기 제거 + hysteresis 해제 직후 whipsaw 차단
 - [~] 업비트 거래소 지원 (`src/exchange/upbit.py` — 2026-04-17 병합 시점에 파일만 포팅됨, 팩토리/심볼정규화/인증 코드 통합 필요)
 - [x] 백테스트 엔진 (시뮬레이션, 평가 지표, 텍스트/HTML 리포트, 국면별/방향별 분석 통계)
 - [x] 백테스트 자동 수집 (실행 전 DB 마지막 시점 → 최신까지 이어서 수집 + CSV 출력, `--no-auto-collect`로 비활성화)
