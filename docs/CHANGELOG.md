@@ -1,5 +1,119 @@
 # HanTrader 변경 이력
 
+## 2026-04-27 BB V9 매 봉 regime INFO 로그 추가
+
+사용자가 백테스트 후 signal.log 에서 **매 봉의 regime/score 결과를 직접
+확인**할 수 있도록 INFO 레벨 한 줄 로그 추가. 기존 `V9 전환` (regime
+변경 캔들만) + `V9 score` (DEBUG, 모든 봉 풀 정보) 와 별도로, 모든 봉에 대해
+컴팩트한 한 줄 INFO 를 signal.log 에 기록한다.
+
+```text
+V9 봉 | 2026-04-09 08:00:00 | sideways  | A=+0 B=+0 C=-1 D=+0 total=-1 | close=82.5200 bbp=+0.078
+V9 봉 | 2026-04-09 09:00:00 | trend_down| A=+0 B=+0 C=-1 D=-1 total=-2 | close=82.1600 bbp=+0.027
+```
+
+토글: `strategy.log_regime_per_candle: false` 로 끔. 기본값은 true.
+`StrategyConfig` 에 필드 추가, `to_strategy_kwargs`/`from_yaml` 에서 전달.
+
+### 변경 파일
+
+- [src/strategy/bb/v9.py](src/strategy/bb/v9.py): `__init__` 에 `log_regime_per_candle`
+  파라미터, `detect_regime` 의 transition 블록 다음에 매 봉 INFO 로그 추가.
+- [src/config.py](src/config.py): `StrategyConfig.log_regime_per_candle` 필드 +
+  `from_yaml` + `to_strategy_kwargs`.
+
+## 2026-04-27 BB V9 에 entry_regime 추적 + Stop&Reverse + 분기 차단 + 동적 트레일링
+
+### 배경
+
+사용자가 SOL/USDT 2026-04-01~15 1h 백테스트 차트에서 4개의 하락 구간
+(빨간 박스)을 짚고, 그 중 **박스 3 (Apr 11~12)** 와 **박스 4 (Apr 14~15)**
+에서 추세 꼭대기 LONG 진입 후 하락이 시작되었지만 SHORT 시그널이
+[trend.py](src/strategy/bb/trend.py) 의 `long_step == 0` 가드에 막혀 발생하지
+못해 손절될 때까지 LONG 보유 → 큰 손실(-56, -34 USDT) 패턴을 보였다.
+또한 박스 4 의 #20 포지션은 04-14 22:00 추세 LONG 1차 → 04-15 02:00 *동일한
+long_step* 위에 "**횡보 반전매수 2차**" 가 발동되어 손절 100% 로 이어졌는데,
+이는 V9 의 `detect_regime` 이 캔들마다 새로 판정되는 동안 분기(trend / sideways)
+를 가로지르며 같은 long_step 카운터를 공유하기 때문에 발생.
+
+### 해결 — V9 전용 4가지 추가 (다른 전략 영향 없음)
+
+#### (a) entry_regime 추적
+
+`generate_signals` 를 오버라이드하여 1차 신규 진입 시점의 regime 을
+`long_entry_regime` / `short_entry_regime` 에 기록. 청산 시 None 으로 리셋.
+
+#### (b) Stop & Reverse (entry_regime 기반)
+
+```text
+LONG 보유 + long_entry_regime == TREND_UP + 현재 regime == TREND_DOWN
+  → LONG 강제 청산 + SHORT 1차 신규 진입 (한 캔들에 동시 발생)
+SHORT 보유 + short_entry_regime == TREND_DOWN + 현재 regime == TREND_UP
+  → SHORT 강제 청산 + LONG 1차 신규 진입
+```
+
+`trend.py` 의 `long_step == 0` / `short_step == 0` 가드를 우회하기 위해
+forced_signals 로 직접 진입 시그널을 만들어낸다. `prev_regime` 만 보던
+이전 설계와 달리 entry_regime 을 봐서 **`trend_up → sideways → trend_down`
+경로에서도 작동** (sideways 경유 시 cooldown 만 작동하던 빈틈 보강).
+
+박스 3, 4 의 핵심 손실 패턴을 직접 해결.
+
+#### (c) 분기 미스매치 차단
+
+`block_branch_mismatch=True` 일 때 — 보유 LONG 포지션의 entry_regime 과
+현재 regime 이 다른 상태에서 **같은 방향 (LONG_ENTRY) 추가 진입 시그널이
+발생하면 무시**. 박스 4 #20 의 04-15 02:00 "횡보 반전매수 2차" 같은
+케이스를 차단.
+
+#### (d) 강한 추세 동적 트레일링
+
+`_trend_signals` 에서 `abs(v9_score_total) >= strong_score_threshold` (기본 3)
+일 때 `trailing_stop_pct` 를 `strong_trailing_multiplier` (기본 3.0) 배.
+박스 1 처럼 -10% 하락에서 트레일링 0.5% 가 너무 타이트해 +20 USDT 만
+챙기고 빠지는 문제 완화. 약한 추세는 기존대로 0.5%.
+
+### 매매 사유 보완 (signal.log 가독성)
+
+forced_signals 의 reason 에 `[V9 S&R]` prefix 부여 — log 한 줄로
+어떤 메커니즘이 발동했는지 즉시 파악 가능.
+
+### 새 파라미터 (config.yaml `strategy:` 섹션)
+
+```yaml
+strategy:
+  name: bb_v9
+  # 기본값들. 모두 명시 안 하면 기본 ON 상태로 동작.
+  strong_score_threshold: 3        # |total| 이 값 이상이면 강한 추세
+  strong_trailing_multiplier: 3.0  # 강한 추세에서 trailing_stop_pct 배수
+  block_branch_mismatch: true      # 분기 미스매치 진입 차단
+  stop_and_reverse: true           # 추세 반전 시 강제 청산 + 반대 진입
+```
+
+### 검증 (실제 SOL/USDT 1h DB, 2026-04-01~15)
+
+```text
+                     PnL%   WinR    PF     DD%  trades  S&R
+OFF (모든 옵션 OFF)  -0.08%  45.0% 0.67x  -0.21%      20    0
+S&R only             -0.05%  43.5% 0.78x  -0.19%      23    6
+S&R + branch         -0.05%  43.5% 0.78x  -0.19%      23    6
+all 3 (default)      -0.05%  45.5% 0.81x  -0.19%      22    6
+```
+
+S&R 발동 횟수가 1 → 6 으로 늘어 entry_regime 기반 감지가 sideways 경유
+경로까지 잡아내는 것을 확인. 4월 SOL 의 trend_up ↔ trend_down 직접 전환이
+적은 구간이라 절대 PnL 변화는 작지만 PF 가 0.67 → 0.81 로 일관 개선.
+
+### 변경 파일
+
+- **[src/strategy/bb/v9.py](src/strategy/bb/v9.py)**: `generate_signals` 오버라이드,
+  `_trend_signals` 에 동적 trailing 추가, `detect_regime` 에 score 컬럼 노출
+  (`v9_score_a`/`v9_score_b`/`v9_score_c`/`v9_score_d`/`v9_score_total`),
+  `__init__` 에 4개 신규 파라미터.
+- **[src/config.py](src/config.py)**: `StrategyConfig` 에 `strong_score_threshold`/
+  `strong_trailing_multiplier`/`block_branch_mismatch`/`stop_and_reverse` 필드 추가,
+  `to_strategy_kwargs` bb_v9 블록 + `from_yaml` 에서 전달.
+
 ## 2026-04-24 BB V9 에 V4 쿨다운 상속 (whipsaw 차단)
 
 ### 배경

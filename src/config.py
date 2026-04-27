@@ -111,6 +111,12 @@ class StrategyConfig:
     swing_window: int = 5                # 최근/직전 스윙 비교 윈도우 (규칙 C)
     mid_persist_window: int = 5          # 중단선 대비 연속 동일부호 윈도우 (규칙 D)
     vote_threshold: int = 2              # 합산 score ≥ 이 값 → TREND_UP, ≤ -값 → TREND_DOWN
+    # V9 추가: 강한 추세 동적 트레일링 + 분기/Stop&Reverse 토글
+    strong_score_threshold: int = 3      # |v9_score_total| ≥ 이 값 → 강한 추세
+    strong_trailing_multiplier: float = 3.0  # 강한 추세에서 trailing_stop_pct × 이 배수
+    block_branch_mismatch: bool = True   # entry_regime ≠ 현재 regime + 동일 방향 진입 시그널 차단
+    stop_and_reverse: bool = True        # trend_up ↔ trend_down 반전 시 기존 포지션 강제 청산
+    log_regime_per_candle: bool = True   # 매 봉 regime/score INFO 로그 (signal.log 에 한 줄씩)
 
     def to_strategy_kwargs(
         self,
@@ -190,7 +196,7 @@ class StrategyConfig:
         if self.name == "bb_v8":
             kwargs["band_avg_lookback"] = self.band_avg_lookback
 
-        # V9 전용 파라미터 (4개 규칙 투표 + hysteresis + V4 상속 쿨다운)
+        # V9 전용 파라미터 (4개 규칙 투표 + hysteresis + V4 상속 쿨다운 + S&R)
         if self.name == "bb_v9":
             kwargs["atr_window"] = self.atr_window
             kwargs["body_window"] = self.body_window
@@ -202,6 +208,12 @@ class StrategyConfig:
             kwargs["hysteresis_candles"] = self.hysteresis_candles
             # V4로부터 상속받은 국면 전환 쿨다운 (trend→sideways 직후 횡보 신규진입 차단)
             kwargs["cooldown_candles"] = self.cooldown_candles
+            # V9 추가: 강한 추세 동적 트레일링 + 분기/Stop&Reverse 토글 + 로깅
+            kwargs["strong_score_threshold"] = self.strong_score_threshold
+            kwargs["strong_trailing_multiplier"] = self.strong_trailing_multiplier
+            kwargs["block_branch_mismatch"] = self.block_branch_mismatch
+            kwargs["stop_and_reverse"] = self.stop_and_reverse
+            kwargs["log_regime_per_candle"] = self.log_regime_per_candle
 
         return kwargs
 
@@ -424,6 +436,11 @@ class AppConfig:
             swing_window=strat_raw.get("swing_window", 5),
             mid_persist_window=strat_raw.get("mid_persist_window", 5),
             vote_threshold=strat_raw.get("vote_threshold", 2),
+            strong_score_threshold=strat_raw.get("strong_score_threshold", 3),
+            strong_trailing_multiplier=strat_raw.get("strong_trailing_multiplier", 3.0),
+            block_branch_mismatch=strat_raw.get("block_branch_mismatch", True),
+            stop_and_reverse=strat_raw.get("stop_and_reverse", True),
+            log_regime_per_candle=strat_raw.get("log_regime_per_candle", True),
         )
 
         # simple sections

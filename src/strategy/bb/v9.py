@@ -59,7 +59,7 @@ import ta
 
 from src.utils.logger import setup_logger
 from src.utils.log_manager import LogManager
-from ..base import MarketRegime, Signal
+from ..base import MarketRegime, Signal, SignalType
 from ..registry import register_strategy
 from .hysteresis import apply_regime_hysteresis
 from .trend import generate_trend_signals
@@ -90,6 +90,11 @@ class BBV9Strategy(BBV4Strategy):
         mid_persist_window: int = 5,
         vote_threshold: int = 2,
         hysteresis_candles: int = 3,
+        strong_score_threshold: int = 3,
+        strong_trailing_multiplier: float = 3.0,
+        block_branch_mismatch: bool = True,
+        stop_and_reverse: bool = True,
+        log_regime_per_candle: bool = True,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -102,13 +107,25 @@ class BBV9Strategy(BBV4Strategy):
         self.mid_persist_window = mid_persist_window
         self.vote_threshold = vote_threshold
         self.hysteresis_candles = hysteresis_candles
+        # 강한 추세 판정 + 동적 트레일링
+        self.strong_score_threshold = strong_score_threshold
+        self.strong_trailing_multiplier = strong_trailing_multiplier
+        # 분기(추세/횡보) 미스매치 차단 + Stop & Reverse
+        self.block_branch_mismatch = block_branch_mismatch
+        self.stop_and_reverse = stop_and_reverse
+        # 매 봉 regime 결과 INFO 로그 (signal.log)
+        self.log_regime_per_candle = log_regime_per_candle
 
         logger.info(
             f"BB V9 전략 초기화: body_window={body_window}, "
             f"body_threshold={body_threshold}, out_streak_min={out_streak_min}, "
             f"swing_window={swing_window}, mid_persist_window={mid_persist_window}, "
             f"vote_threshold={vote_threshold}, hysteresis_candles={hysteresis_candles}, "
-            f"atr_window={atr_window}"
+            f"atr_window={atr_window}, strong_score_threshold={strong_score_threshold}, "
+            f"strong_trailing_multiplier={strong_trailing_multiplier}, "
+            f"block_branch_mismatch={block_branch_mismatch}, "
+            f"stop_and_reverse={stop_and_reverse}, "
+            f"log_regime_per_candle={log_regime_per_candle}"
         )
 
     # ------------------------------------------------------------------
@@ -183,6 +200,14 @@ class BBV9Strategy(BBV4Strategy):
         # === 합산 및 raw regime ===
         total = score_a + score_b + score_c + score_d
 
+        # generate_signals 가 동적 트레일링/분기 판단에 쓸 수 있도록
+        # 4규칙 점수와 합계를 indicators df 컬럼으로 노출 (부수효과).
+        df["v9_score_a"] = score_a
+        df["v9_score_b"] = score_b
+        df["v9_score_c"] = score_c
+        df["v9_score_d"] = score_d
+        df["v9_score_total"] = total
+
         raw = pd.Series(MarketRegime.SIDEWAYS, index=df.index)
         raw[total >= self.vote_threshold] = MarketRegime.TREND_UP
         raw[total <= -self.vote_threshold] = MarketRegime.TREND_DOWN
@@ -221,6 +246,26 @@ class BBV9Strategy(BBV4Strategy):
                 f"raw={raw.iloc[i].value} close={df['close'].iloc[i]:.4f}"
             )
 
+        # === 매 봉 INFO 로그 (regime 추적용 — toggle 가능) ===
+        # 사용자가 백테스트 후 signal.log 에서 매 봉의 regime 결과를
+        # 직접 볼 수 있도록 한 줄짜리 컴팩트 로그를 INFO 레벨로 출력한다.
+        # 노이즈가 부담스러우면 strategy.log_regime_per_candle: false 로 끈다.
+        if self.log_regime_per_candle:
+            idx = df.index
+            sa = score_a.to_numpy(); sb = score_b.to_numpy()
+            sc = score_c.to_numpy(); sd = score_d.to_numpy()
+            tot = total.to_numpy()
+            final_arr = final.to_numpy()
+            closes = df["close"].to_numpy()
+            bbps = df["bb_pct"].to_numpy()
+            for i in range(len(df)):
+                self._log_info(
+                    f"V9 봉 | {idx[i]} | {final_arr[i].value:<10} | "
+                    f"A={int(sa[i]):+d} B={int(sb[i]):+d} "
+                    f"C={int(sc[i]):+d} D={int(sd[i]):+d} total={int(tot[i]):+d} "
+                    f"| close={closes[i]:.4f} bbp={bbps[i]:+.3f}"
+                )
+
         # === 캔들별 DEBUG 로그 (모든 시점의 A/B/C/D/total/raw/final) ===
         # 성능: LogManager 레벨이 DEBUG가 아니면 루프/포맷팅을 건너뛴다.
         # (HanLogger에는 isEnabledFor가 없어 LogManager._level로 사전 체크)
@@ -249,6 +294,253 @@ class BBV9Strategy(BBV4Strategy):
         return final
 
     # ------------------------------------------------------------------
+    # 시그널 생성: V4 cooldown + Stop&Reverse + 분기 미스매치 차단 + entry_regime 추적
+    # ------------------------------------------------------------------
+
+    def generate_signals(self, df):
+        """V9 전용 generate_signals.
+
+        BB V4 의 cooldown 추적 + 다음 4가지를 통합:
+
+        (a) entry_regime 추적 — 1차 진입 시점의 regime 을 long_entry_regime
+            / short_entry_regime 에 기록.
+        (b) Stop & Reverse — prev/current regime 이 모두 trend 인데 방향이
+            반전된 캔들에서, 보유 포지션을 강제 청산. 청산 직후 같은 캔들의
+            정상 추세추종 진입 시그널이 자연스럽게 신규 진입을 만듦.
+        (c) 분기 미스매치 차단 — 보유 포지션의 entry_regime 과 새 진입
+            시그널의 현재 regime 이 다르면(예: trend_up 으로 시작한 LONG
+            위에 sideways 분기에서 추가 LONG 시그널) 같은 방향 추가 진입은
+            무시. 반대 방향이면 (b) 에서 이미 청산되므로 그대로 진입.
+        (d) reason 보강 — 위 흐름으로 발생한 시그널은 [V9 ...] prefix.
+        """
+        indicators = self.compute_indicators(df)
+        regimes = self.detect_regime(indicators)  # df 에 v9_score_total 등 추가됨
+        indicators["regime"] = regimes
+
+        signals: list[Signal] = []
+
+        long_step = 0
+        short_step = 0
+        entry_price = 0.0
+        total_weight = 0.0
+        peak_price = 0.0
+        trough_price = float("inf")
+        self._last_entry_idx = -999
+
+        # V9 추가 상태
+        long_entry_regime: MarketRegime | None = None
+        short_entry_regime: MarketRegime | None = None
+
+        # cooldown 추적 (V4 동일)
+        last_trend_exit_idx = -999
+        prev_regime: MarketRegime | None = None
+
+        for i in range(len(indicators)):
+            row = indicators.iloc[i]
+            ts = indicators.index[i]
+            price = row["close"]
+            bbp = row["bb_pct"]
+            bb_width = row["bb_width"]
+            regime = row["regime"]
+            leverage = self.calc_leverage(bb_width)
+            score_total = int(row.get("v9_score_total", 0))
+
+            if long_step > 0:
+                peak_price = max(peak_price, price)
+            if short_step > 0:
+                trough_price = min(trough_price, price)
+
+            # === cooldown 추적 (trend → sideways 전환) ===
+            if (
+                prev_regime is not None
+                and prev_regime != MarketRegime.SIDEWAYS
+                and regime == MarketRegime.SIDEWAYS
+            ):
+                last_trend_exit_idx = i
+                logger.debug(
+                    f"[V9] {ts} cooldown 시작: {prev_regime.value} → sideways "
+                    f"({self.cooldown_candles}캔들)"
+                )
+
+            in_cooldown = (i - last_trend_exit_idx) < self.cooldown_candles
+
+            # ====================================================
+            # (b) Stop & Reverse: entry_regime 기반 보유 포지션 반전
+            #
+            # 보유 LONG 의 entry_regime 이 trend_up 인데 현재 regime 이
+            # trend_down 으로 바뀌면 (sideways 경유 포함) → LONG 강제 청산
+            # + SHORT 1차 신규 진입을 한 캔들에 함께 발생시킨다.
+            # trend.py 의 `long_step == 0` 가드를 우회하기 위해 진입 시그널을
+            # 직접 만든다.
+            # ====================================================
+            forced_signals: list[Signal] = []
+            if self.stop_and_reverse:
+                if (
+                    long_step > 0
+                    and long_entry_regime == MarketRegime.TREND_UP
+                    and regime == MarketRegime.TREND_DOWN
+                ):
+                    forced_signals.append(Signal(
+                        timestamp=ts,
+                        signal_type=SignalType.LONG_EXIT,
+                        price=float(price),
+                        leverage=leverage,
+                        reason=(
+                            f"[V9 S&R] entry=trend_up → 현재 trend_down "
+                            f"LONG 강제 청산 (score={score_total:+d})"
+                        ),
+                    ))
+                    forced_signals.append(Signal(
+                        timestamp=ts,
+                        signal_type=SignalType.SHORT_ENTRY,
+                        price=float(price),
+                        leverage=leverage,
+                        position_ratio=0.20,
+                        entry_step=1,
+                        reason=(
+                            f"[V9 S&R] LONG → SHORT 자동 전환 1차 "
+                            f"(score={score_total:+d}, BB%={bbp:.2f})"
+                        ),
+                    ))
+                elif (
+                    short_step > 0
+                    and short_entry_regime == MarketRegime.TREND_DOWN
+                    and regime == MarketRegime.TREND_UP
+                ):
+                    forced_signals.append(Signal(
+                        timestamp=ts,
+                        signal_type=SignalType.SHORT_EXIT,
+                        price=float(price),
+                        leverage=leverage,
+                        reason=(
+                            f"[V9 S&R] entry=trend_down → 현재 trend_up "
+                            f"SHORT 강제 청산 (score={score_total:+d})"
+                        ),
+                    ))
+                    forced_signals.append(Signal(
+                        timestamp=ts,
+                        signal_type=SignalType.LONG_ENTRY,
+                        price=float(price),
+                        leverage=leverage,
+                        position_ratio=0.20,
+                        entry_step=1,
+                        reason=(
+                            f"[V9 S&R] SHORT → LONG 자동 전환 1차 "
+                            f"(score={score_total:+d}, BB%={bbp:.2f})"
+                        ),
+                    ))
+
+            # === 일반 시그널 생성 (cooldown 적용) ===
+            # forced_signals 가 청산/신규를 모두 처리한 경우, 같은 캔들에서
+            # 일반 흐름의 추가 시그널은 만들지 않는다 (S&R 진입을 단일 캔들
+            # 1차로 명확히 유지).
+            sr_handled = bool(forced_signals)
+            if sr_handled:
+                sigs: list[Signal] = []
+            elif regime == MarketRegime.SIDEWAYS:
+                lev = min(leverage, self.sideways_leverage_max)
+                adx_val = row["adx"]
+                adx_rising = bool(row["adx_rising"])
+                has_position = long_step > 0 or short_step > 0
+
+                if in_cooldown and not has_position:
+                    logger.debug(
+                        f"[V9] {ts} cooldown 신규진입 차단 "
+                        f"({i - last_trend_exit_idx}/{self.cooldown_candles})"
+                    )
+                    sigs = []
+                else:
+                    sigs = self._sideways_signals_v2(
+                        ts, price, bbp, bb_width, lev, long_step, short_step,
+                        entry_price, adx=adx_val, adx_rising=adx_rising,
+                    )
+            else:
+                sigs = self._trend_signals_v2(
+                    ts, price, bbp, bb_width, leverage, regime, row,
+                    long_step, short_step, entry_price,
+                    peak_price=peak_price, trough_price=trough_price,
+                    candle_idx=i,
+                )
+
+            # ============================================
+            # (c) 분기 미스매치 차단: 같은 방향 + 다른 출처
+            # ============================================
+            if self.block_branch_mismatch:
+                filtered: list[Signal] = []
+                for sig in sigs:
+                    if sig.signal_type == SignalType.LONG_ENTRY:
+                        if (
+                            long_step > 0
+                            and long_entry_regime is not None
+                            and regime != long_entry_regime
+                        ):
+                            logger.debug(
+                                f"[V9] {ts} LONG 분기차단: 출처={long_entry_regime.value} "
+                                f"vs 현재={regime.value} (sig={sig.reason})"
+                            )
+                            continue
+                    elif sig.signal_type == SignalType.SHORT_ENTRY:
+                        if (
+                            short_step > 0
+                            and short_entry_regime is not None
+                            and regime != short_entry_regime
+                        ):
+                            logger.debug(
+                                f"[V9] {ts} SHORT 분기차단: 출처={short_entry_regime.value} "
+                                f"vs 현재={regime.value} (sig={sig.reason})"
+                            )
+                            continue
+                    filtered.append(sig)
+                sigs = filtered
+
+            # === 시그널 적용 ===
+            all_sigs = forced_signals + sigs
+            meta = {
+                "bbp": float(bbp),
+                "bb_width": float(bb_width),
+                "rsi": float(row["rsi"]),
+                "macd_diff": float(row["macd_diff"]),
+                "adx": float(row["adx"]),
+                "regime": regime.value,
+                "v9_score_total": score_total,
+            }
+            for sig in all_sigs:
+                sig.metadata = meta
+                signals.append(sig)
+
+                old_long, old_short = long_step, short_step
+                long_step, short_step, entry_price, total_weight = self._update_position(
+                    sig, long_step, short_step, entry_price, total_weight,
+                )
+
+                # entry_regime 갱신: 1차 신규 진입 시점에 기록
+                if sig.signal_type == SignalType.LONG_ENTRY:
+                    if old_long == 0 and long_step > 0:
+                        long_entry_regime = regime
+                    self._last_entry_idx = i
+                elif sig.signal_type == SignalType.SHORT_ENTRY:
+                    if old_short == 0 and short_step > 0:
+                        short_entry_regime = regime
+                    self._last_entry_idx = i
+
+                # 청산 시 entry_regime 리셋
+                if long_step == 0 and short_step == 0:
+                    peak_price = 0.0
+                    trough_price = float("inf")
+                    self._last_entry_idx = -999
+                    long_entry_regime = None
+                    short_entry_regime = None
+                elif long_step == 0:
+                    long_entry_regime = None
+                elif short_step == 0:
+                    short_entry_regime = None
+
+            prev_regime = regime
+
+        logger.info(f"V9 시그널 생성 완료: {len(signals)}건")
+        return signals
+
+    # ------------------------------------------------------------------
     # 추세장 시그널 오버라이드: 역추세(반전) 진입 차단 (Option A)
     # ------------------------------------------------------------------
 
@@ -269,15 +561,18 @@ class BBV9Strategy(BBV4Strategy):
     ) -> list[Signal]:
         """V9 추세장 시그널.
 
-        기존 BB 전략은 추세장에서도 '반대 방향 반전매매'를 허용했다
-        (BB 상단에서 regime=DOWN이면 Short 진입, BB 하단에서 regime=UP이면
-        Long 진입). 이는 엄밀히 반전매매로, 추세장에서는 칼날 잡기로
-        기능할 위험이 있다.
-
-        V9는 `allow_counter_trend=False` 로 호출해서 추세장에서는
-        '추세추종 방향' 시그널만 발생시킨다. 물타기 후 손절/트레일링/익절
-        로직은 그대로 유지되어 포지션 관리는 변경 없음.
+        - `allow_counter_trend=False`: 추세장에서는 추세추종 방향만 진입.
+        - 동적 트레일링: |v9_score_total| >= `strong_score_threshold` 인
+          강한 추세에서는 trailing_stop_pct 를 `strong_trailing_multiplier`
+          배 적용해서 너무 빠른 청산을 방지 (박스 1처럼 -10% 하락 중
+          저점대비 +0.5% 만 되돌려도 빠지는 문제 완화).
         """
+        score_total = abs(int(row.get("v9_score_total", 0)))
+        if score_total >= self.strong_score_threshold:
+            trailing_stop_pct = self.trailing_stop_pct * self.strong_trailing_multiplier
+        else:
+            trailing_stop_pct = self.trailing_stop_pct
+
         return generate_trend_signals(
             ts=ts, price=price, bbp=bbp, bb_width=bb_width, leverage=leverage,
             regime=regime, row=row,
@@ -285,7 +580,7 @@ class BBV9Strategy(BBV4Strategy):
             stoploss_pct=self.stoploss_pct,
             takeprofit_pct=self.takeprofit_pct,
             trailing_start_pct=self.trailing_start_pct,
-            trailing_stop_pct=self.trailing_stop_pct,
+            trailing_stop_pct=trailing_stop_pct,
             peak_price=peak_price, trough_price=trough_price,
             logger=logger,
             allow_counter_trend=False,
